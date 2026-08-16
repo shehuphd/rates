@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "rates"
+version = "0.0.1"
+description = "Reserved. A pricing registry and decision layer, spanning multiple pricing universes (AI APIs first). Design in progress; this release has no functionality."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Mo Shehu" }]
+keywords = [
+    "llm",
+    "pricing",
+    "model-selection",
+    "openai",
+    "anthropic",
+    "gemini",
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/shehuphd/rates"
+Repository = "https://github.com/shehuphd/rates"
+Changelog = "https://github.com/shehuphd/rates/blob/main/CHANGELOG.md"
+
+[tool.setuptools.package-data]
+rates = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
