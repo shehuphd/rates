@@ -2,7 +2,7 @@
 
 A pricing registry and decision layer, spanning multiple pricing universes. Starting with AI API rates; cloud pricing and others may follow.
 
-**This release (`0.0.2`) is a name reservation on PyPI, not a working library.** It has no functionality beyond a version number. A design is in progress; see [project/ROADMAP.md](project/ROADMAP.md) for status.
+**This release (`0.0.3`) is a name reservation on PyPI, not a working library.** It has no functionality beyond a version number. A design is in progress; see [project/ROADMAP.md](project/ROADMAP.md) for status.
 
 ## Why this exists
 
