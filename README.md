@@ -6,7 +6,9 @@ A pricing registry and decision layer, spanning multiple pricing universes. Star
 
 ## Why this exists
 
-Provider pricing pages change often, aren't machine-readable, and don't answer the question a dev actually has: which option, for this job, at this budget. Raw per-token price feeds already exist and stay current for AI APIs ([genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM's model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json)) — `rates` is meant to build on feeds like these rather than duplicate them, adding the decision layer they don't attempt.
+Provider pricing pages change often, aren't machine-readable, and don't answer the question a dev actually has: which option, for this job, at this budget. Several raw feeds already exist ([models.dev](https://github.com/anomalyco/models.dev), [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM's model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), [OpenRouter](https://openrouter.ai/api/v1/models)), each with real gaps, `rates` fuses them into one schema rather than duplicating any single one, and ships it as dated, versioned releases none of them offer on their own.
+
+`rates` exposes facts, never opinions: no model gets ranked, scored, or labeled "best." See [ARCHITECTURE.md](ARCHITECTURE.md) for why, and [ERD.md](ERD.md) for the schema itself.
 
 ## Status
 
