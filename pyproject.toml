@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "rates"
 version = "0.0.3"
-description = "Reserved. A pricing registry and decision layer, spanning multiple pricing universes (AI APIs first). Design in progress; this release has no functionality."
+description = "A pricing registry and decision layer, spanning multiple pricing universes (AI APIs first). Verified facts, no opinions."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -37,9 +37,6 @@ dependencies = []
 Homepage = "https://github.com/shehuphd/rates"
 Repository = "https://github.com/shehuphd/rates"
 Changelog = "https://github.com/shehuphd/rates/blob/main/CHANGELOG.md"
-
-[tool.setuptools.package-data]
-rates = ["py.typed"]
 
 [tool.ruff]
 line-length = 100

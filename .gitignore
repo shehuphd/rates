@@ -16,6 +16,10 @@ Desktop.ini
 .claude/
 .codex/
 
+# Built ledger release asset (published as a GitHub Release asset; the
+# gzipped copy under src/rates/ai/ is the tracked one).
+/ledger-ai.json
+
 # Internal documentation (top-level project docs stay tracked).
 *.md
 !README.md

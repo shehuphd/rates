@@ -11,6 +11,7 @@ erDiagram
     REGISTRY ||--o{ MODEL : contains
     REGISTRY ||--o{ SOURCE : consulted
     MODEL ||--o{ PRICE_ENTRY : "priced by"
+    MODEL ||--o{ PRICE_TIER : "repriced past thresholds by"
     MODEL ||--o{ PRICE_DISCREPANCY : "flagged by"
     MODEL ||--o| REASONING : "may support"
     REASONING ||--o{ REASONING_LEVEL : offers
@@ -52,10 +53,17 @@ erDiagram
         decimal conflicting_value
         decimal difference_pct
     }
+    PRICE_TIER {
+        string when_dimension "e.g. context"
+        int when_over "threshold, e.g. 200000"
+        map price "unit-to-rate overrides"
+    }
     REASONING {
-        bool effort_parameter_required
+        string control "effort | budget_tokens | toggle"
+        bool effort_parameter_required "true | false | unknown"
         bool can_disable_reasoning
         string default_label
+        int_pair budget "min/max, budget_tokens only"
     }
     REASONING_LEVEL {
         string label
@@ -117,6 +125,24 @@ Price is a flat map of unit name to rate, never a single blended number, and nev
 
 A caller who wants a single comparable number (a "blended $/mtok," say) computes it themselves from the raw units and their own expected usage mix. Baking in a fixed input:output weighting was an earlier design choice, reverted, it assumed a usage ratio that isn't true for every caller.
 
+## `PRICE_TIER`
+
+Some providers reprice a model past a usage threshold, most commonly context size: Gemini and GPT long-context models charge one rate below 200k input tokens and a higher rate above. `price` always holds the base tier, so nothing about flat-price models, filtering, or `price_max` changes; tiers are an additional, optional `price_tiers` list:
+
+```json
+"price": { "currency": "USD", "input_mtok": 10, "output_mtok": 45 },
+"price_tiers": [
+  {
+    "when": { "dimension": "context", "over": 200000 },
+    "price": { "input_mtok": 20, "output_mtok": 90 }
+  }
+]
+```
+
+Each tier's `price` holds only the units that change; unnamed units fall through to base. `when` is open-shaped: `context` is the only dimension upstream data carries today, and a future dimension (volume, batch) fits without schema change. On the caller side the tier is explicit opt-in, matching `price_unit`: `model.price` is the base tier, `model.price_for(context=500000)` resolves the applicable overrides into a flat price. `filter(price_max=...)` compares against base.
+
+Covers all three upstream forms: models.dev's `tiers` list, its `context_over_200k` shorthand (a tier with `over: 200000`), and genai-prices' tiered list form.
+
 ## `PRICE_DISCREPANCY`
 
 Primary wins outright when sources disagree, models.dev's value is always what lands in `price`, no algorithmic tie-breaking. But the disagreement itself is a fact, not noise to discard: checked directly across genai-prices and models.dev on 355 model records where both describe the same provider and the same model, 93 (26%) disagreed by more than 1% on input price. Silently dropping that would hide something real, especially since the majority of `rates`' actual reads are against a static `ledger` file, generated once by a fusion run nobody watching the pipeline that week ever revisits, a warning at fusion time would never reach that reader. Stored on the record instead, it travels with the data.
@@ -159,6 +185,10 @@ Reasoning-effort control differs enough across models that a single range doesn'
 | Optional, `none` is a real selectable value | `grok-4.3` (`values: [none, low, medium, high]`) | `can_disable_reasoning: true`, `levels` starts at rank `0` |
 
 `none` is never assumed present. It's included in `levels` exactly when a source lists it as a value the model actually accepts, never added as a universal floor.
+
+**`control` names how the dial works**, because three genuinely different control types exist upstream: `"effort"` (named levels; `levels` and `range` apply), `"budget_tokens"` (a numeric thinking budget; `budget: {min, max}` applies, `levels` is empty), and `"toggle"` (on/off, nothing else; neither applies). One field per meaning, rather than `range` holding level ranks for one model and token budgets for another.
+
+**`effort_parameter_required` is tri-state**: `true`/`false` where OpenRouter's per-model `reasoning.mandatory` covers the model (about 290 models; `true` means the API errors without the parameter), absent where no source carries it. Unknown is never reported as `false`, the same rule `tool_call` follows. OpenRouter's `default_effort` likewise fills `default` where available.
 
 Each entry in `levels` pairs a `label` (the string an API call actually needs) with a `rank` (its position in that model's own ascending order, for a caller doing arithmetic, "give me this model's cheapest reasoning setting," "give me the midpoint, rounded down"). The rank is only comparable within one model's own `levels`, `medium` on one model and `medium` on another aren't claimed to cost the same.
 
@@ -207,6 +237,7 @@ Values for `claude-opus-5`:
   },
   "price_discrepancies": [],
   "reasoning": {
+    "control": "effort",
     "effort_parameter_required": false,
     "can_disable_reasoning": false,
     "levels": [

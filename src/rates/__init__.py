@@ -1,10 +1,28 @@
-"""rates: reserved on PyPI.
+"""rates: a pricing registry and decision layer.
 
-This is a name-reservation release. The taxonomy and API surface are still
-under design -- see the project's ARCHITECTURE.md and ROADMAP.md. Nothing
-in this version is stable or meant for use.
+Exposes verified facts (price, capabilities, lifecycle) and leaves the
+deciding to the caller. The AI universe lives at ``rates.ai``.
 """
+
+from ._errors import (
+    AllSourcesUnreachableError,
+    LiveFusionError,
+    PrimarySourceUnavailableError,
+    RatesError,
+    RatesWarning,
+    StaleLedgerWarning,
+    SyncFallbackWarning,
+)
 
 __version__ = "0.0.3"
 
-__all__ = ["__version__"]
+__all__ = [
+    "AllSourcesUnreachableError",
+    "LiveFusionError",
+    "PrimarySourceUnavailableError",
+    "RatesError",
+    "RatesWarning",
+    "StaleLedgerWarning",
+    "SyncFallbackWarning",
+    "__version__",
+]

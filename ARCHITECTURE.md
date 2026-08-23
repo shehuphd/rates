@@ -53,6 +53,18 @@ No single existing source covers what this universe needs:
 3. **Scope.** models.dev is an AI-model database. `rates` is a pricing framework meant to span AI, cloud, and other domains under one coherent, extensible schema, a different project shape entirely.
 4. **Control.** A registry this central to how a caller picks and pays for a model is worth owning outright rather than depending on a third party's schema decisions and update cadence.
 
+## Admission criteria: what it takes for a record to appear
+
+The registry's scope is defined by a completeness bar, not by any single source's catalog. Every criterion is checkable mechanically, and the fusion applies them automatically, so a model clears the bar the moment the data supports it, with no hand-curation:
+
+1. **Identity.** A provider id and model id, matched across whatever sources know it, never fuzzy-guessed.
+2. **Price.** A currency and the units its type bills on: a chat model needs input and output rates, a video model its per-second rate.
+3. **Type.** What the API contract does (chat, embedding, rerank, ...), since a price without a type isn't interpretable.
+4. **Lifecycle.** A status, even if only active-by-absence-of-deprecation.
+5. **Corroboration.** Carried by the primary source, or by at least two independent fallback sources agreeing on price within the discrepancy threshold. Two independent agreeing sources is more verification than one primary listing, not less, which is what lets a model the primary hasn't cataloged yet appear without lowering the bar.
+
+Criteria 1 through 4 say the record is complete enough to use; 5 says we believe it. Records admitted through the two-fallback route are visibly thinner (their `sources` field never lists the primary, and fields only the primary carries stay absent), so a caller who wants primary-backed records only can filter by provenance. Each future universe defines its own versions of 1 through 4 against its own axes; 5 generalizes unchanged.
+
 ## `ledger`, `sync`, and `live`: three ways to get data, one fusion engine
 
 Rates are durable. Once a provider sets a price, it typically holds for a long while, AI API pricing especially, cloud pricing similarly, both usually announced well ahead of taking effect. That fact shapes the whole distribution model: the common case isn't "refetch everything," it's "confirm nothing changed," and only doing the expensive work when it did.
@@ -75,10 +87,10 @@ Rates are durable. Once a provider sets a price, it typically holds for a long w
 
 Settled by stress-testing the design against realistic bad conditions (per CODING.md's "production is where independently-rare conditions overlap"), not by picking numbers that sounded reasonable in isolation:
 
-- **Timeouts are generous defaults, not fixed ceilings.** 5s to connect, 45s to read a full response, both caller-overridable (`rates.ai.load(live=True, timeout=180)`). A short default tuned only for good connections fails outright on real degraded links, satellite-backed in-flight wifi included, where a few megabytes can genuinely take minutes; a caller who knows their situation needs to be able to say so, rather than being stuck with a number tuned for everyone else.
-- **One retry on transient failure only** (timeout, connection error), a short fixed backoff, not exponential. A clean error response (404, malformed JSON) never retries, that's not a connectivity problem a retry fixes.
+- **Timeouts are generous, and the slow connection is the design case, not the edge case.** Up to three attempts per URL on an escalating ladder, 30s, 60s, 120s; a caller timeout replaces any rung below it, capped at a 300-second ceiling (`rates.ai.load(live=True, timeout=180)`), above which the value is rejected with a clear error rather than clamped. The ladder starts generous rather than small deliberately: a short first attempt would save a fast-broadband user a few seconds on a rare blip while guarantee-failing the user on desert wifi, a satellite link, or a congested mobile network, who is who these numbers are for.
+- **Server-side transient failures retry with backoff; clean errors never do.** A 429, 500, 502, 503, or 504 resolves on the server's schedule, so it gets the same up-to-three attempts with short exponential pauses between (1s, then 2s), honoring a `Retry-After` header when the server sends one, capped at 60 seconds so a hostile or broken header can't stall the caller. A 404, a 400, or malformed JSON never retries, no wait fixes those. When a volatile universe (forex, say) needs a more aggressive profile later, it overrides the ladder and status list as constants; the mechanism stays this one.
 - **All duration checks anchor to UTC, never local wall-clock time.** The 24-hour `live` cache expiry and the staleness-vs-`snapshot_date` check both use `datetime.now(timezone.utc)`. A system's local timezone shifting mid-session (a flight crossing zones) must never change when a cache is considered stale.
-- **`sync` never raises.** Unlike `live`, which explicitly promises fresh-or-nothing, `sync` promises something weaker: a cheap check, best-effort. Any failure to complete that check (GitHub's API rate-limited, GitHub down, a bad connection) falls back silently to whatever's already local, with a warning, never a blocking exception, a feature meant purely as a convenience shouldn't be able to take down a caller's program.
+- **`sync` never raises, and never fails silently either.** Unlike `live`, which explicitly promises fresh-or-nothing, `sync` promises something weaker: a cheap check, best-effort. Any failure to complete that check (GitHub's API rate-limited, GitHub down, a bad connection) falls back to the local ledger with a visible warning saying the sync couldn't complete and what data is being served instead, never a blocking exception, a feature meant purely as a convenience shouldn't be able to take down a caller's program, and never a wordless fallback the caller can't see happened.
 - **GitHub's unauthenticated API rate limit is 60 requests/hour, per IP, confirmed live against `api.github.com`.** That's shared across everyone on the same IP, which matters most in CI: GitHub Actions' hosted runners share IP ranges across every customer on the platform, not just `rates` users, so a `sync` call can get rate-limited by traffic that has nothing to do with `rates` at all. Mitigation that costs nothing: both `sync` and `live` check for a `GITHUB_TOKEN` environment variable, already set in every GitHub Actions job by default, and use it as a bearer token when present, raising the effective limit to 5,000/hour with no configuration from the caller.
 - **A `sync`-triggered follow-up fetch (when something did change) is not "cheap."** The manifest check is small and fast; pulling the actual updated ledger asset is multi-megabyte, same as `live`'s fetches, and inherits the same configurable timeout, not a separate hardcoded assumption that it'll always be quick.
 - **`REGISTRY.schema_version` is checked before parsing, not after.** A `rates` install pinned for a long time, combined with a schema that evolved a breaking change in the meantime, means a freshly-fetched `sync`/`live` result can be a shape the installed dataclasses don't understand. Checked against a compatibility rule before parsing, with a specific message ("this ledger needs a newer `rates`, run `pip install -U rates`"), rather than an opaque failure partway through building a `Model`.
@@ -99,6 +111,9 @@ class PrimarySourceUnavailableError(LiveFusionError): ...  # models.dev specific
 ## Public API shape
 
 - `rates.ai` is the namespace for this universe. `rates.ai.load(...)` is the entry point, returning a `Registry`, not a bare list, so the envelope metadata (`schema_version`, `snapshot_date`, `sources` and their `status`) travels with the models rather than being discarded.
+- One entry point for all three access tiers: `load()` reads the bundled ledger, `load(sync=True)` runs the freshness check, `load(live=True)` runs the full fusion. All three return the same `Registry`, so downstream code never cares which path produced it; passing both flags raises, they're different promises, not composable ones.
+- Warnings (staleness, a sync that couldn't complete) surface through Python's `warnings` module with typed categories under a `RatesWarning` base (`StaleLedgerWarning`, `SyncFallbackWarning`), so a caller can filter, silence, or escalate them with stdlib machinery, `warnings.simplefilter("error", StaleLedgerWarning)` turns staleness into a hard failure for whoever wants that.
+- No HTTP client dependency: `sync` and `live` run on a small stdlib (`urllib`) helper, so the entire package installs with zero dependencies and live checking works out of the box, opt-in by calling it, nothing extra to install.
 - `Registry.filter(...)`, not `recommend(...)`. `recommend` implies a judgment call about which model is right, which contradicts "we don't decide for you." `filter` narrows a set by facts the caller supplied (budget, required modality, reasoning capability, still active) and can return zero, one, or many matches, `rates` has no view on which of those is best.
 - Sorting is a separate chained call, `Registry.filter(...).sort_by(field, descending=...)`, never a `filter()` parameter. They're different jobs (narrowing vs. ordering), and a caller may want to sort without filtering at all. `descending` is always stated explicitly, no field defaults to a "good" direction, that would be another opinion smuggled into the interface.
 - Model records are stdlib `dataclasses`, not Pydantic. Pydantic would land as a mandatory dependency on the default `ledger` install path, not just `live`, breaking the zero-dependency, air-gapped-safe promise for the common case.
@@ -140,7 +155,7 @@ Result cardinality was examined and dismissed as the filter/search distinction: 
 
 ### Numeric comparisons: paired flags, no operator expressions
 
-`--price-max 3.00` and `--price-min 0.50` cover at-most, at-least, and between, mirroring `.filter(price_max=3.00, price_min=0.50)`. Currency is always an ISO code (`--currency USD`), never a symbol, since `$` is ambiguous across USD, CAD, AUD, and others.
+`--price-max 3.00` and `--price-min 0.50` cover at-most, at-least, and between, mirroring `.filter(price_max=3.00, price_min=0.50)`. A price bound always names its billing unit explicitly (`--price-unit input_mtok` / `price_unit="input_mtok"`), never defaults to one: models bill on fundamentally different units (`input_mtok`, `output_per_second`, `web_search_per_kcount`), and a default would be a silent assumption about which one the caller meant. A bound without a unit raises, and the error lists the units present in the data itself (`Registry.price_units()`), so the fix is in the message, not the docs. Currency is always an ISO code (`--currency USD`), never a symbol, since `$` is ambiguous across USD, CAD, AUD, and others.
 
 An inline operator syntax (`rates ai search provider=anthropic price<=3.00 model=%opus%`) was considered and rejected on two grounds:
 
@@ -152,14 +167,16 @@ If a predicate ever proves inexpressible as flags, the additive path is a single
 ### A composed example
 
 ```bash
-rates ai filter --provider anthropic --model-contains opus --price-max 5.00 --limit 10
+rates ai filter --provider anthropic --model-contains opus --price-max 5.00 --price-unit input_mtok --limit 10
 ```
 
 ```python
-rates.ai.load().filter(provider="anthropic", model_contains="opus", price_max=5.00)
+rates.ai.load().filter(
+    provider="anthropic", model_contains="opus", price_max=5.00, price_unit="input_mtok"
+)
 ```
 
-Anthropic models with opus in the name, at most $5/mtok input, first ten. Every constraint explicit, and the result is whatever the facts return: zero, one, or many, with no view from `rates` on which of them to pick.
+Anthropic models with opus in the name, at most $5 per million input tokens, first ten. Every constraint explicit, and the result is whatever the facts return: zero, one, or many, with no view from `rates` on which of them to pick.
 
 ### Notes for future universes
 
