@@ -16,6 +16,9 @@ Desktop.ini
 .claude/
 .codex/
 
+# Per-run test results index.
+/TEST_INDEX.CSV
+
 # Built ledger release asset (published as a GitHub Release asset; the
 # gzipped copy under src/rates/ai/ is the tracked one).
 /ledger-ai.json

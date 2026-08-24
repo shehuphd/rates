@@ -17,11 +17,10 @@ statuses as its own profile; the mechanism stays this one.
 from __future__ import annotations
 
 import json
-import socket
 import time
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import Any
 
 TIMEOUT_LADDER = (30, 60, 120)
 MAX_TIMEOUT = 300
@@ -41,7 +40,7 @@ class FetchError(Exception):
     details leak upward."""
 
 
-def validate_timeout(timeout: Optional[float]) -> Optional[float]:
+def validate_timeout(timeout: float | None) -> float | None:
     """Check a caller-supplied timeout against the ceiling. None means the
     ladder's own rungs apply unchanged."""
     if timeout is None:
@@ -57,8 +56,8 @@ def validate_timeout(timeout: Optional[float]) -> Optional[float]:
 
 def fetch_json(
     url: str,
-    timeout: Optional[float] = None,
-    token: Optional[str] = None,
+    timeout: float | None = None,
+    token: str | None = None,
 ) -> Any:
     """GET a URL and parse its body as JSON.
 
@@ -81,7 +80,7 @@ def fetch_json(
                 _sleep(_retry_delay(attempt, exc.headers.get("Retry-After")))
                 continue
             raise FetchError(f"{url}: HTTP {exc.code}") from exc
-        except (TimeoutError, socket.timeout, urllib.error.URLError) as exc:
+        except (TimeoutError, urllib.error.URLError) as exc:
             if attempt < final:
                 _sleep(BACKOFF_SECONDS[attempt])
                 continue
@@ -97,7 +96,7 @@ def fetch_json(
     raise AssertionError("unreachable: the final attempt always raises or returns")
 
 
-def _retry_delay(attempt: int, retry_after: Optional[str]) -> float:
+def _retry_delay(attempt: int, retry_after: str | None) -> float:
     """Backoff before the next attempt: the ladder's pause, or the server's
     Retry-After when it asks for longer, capped so a hostile or broken
     header can't stall the caller for minutes."""
@@ -110,10 +109,11 @@ def _retry_delay(attempt: int, retry_after: Optional[str]) -> float:
     return min(delay, RETRY_AFTER_CAP)
 
 
-def _get(url: str, timeout: float, token: Optional[str]) -> bytes:
+def _get(url: str, timeout: float, token: str | None) -> bytes:
     headers = {"User-Agent": _USER_AGENT, "Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return response.read()
+        body: bytes = response.read()
+        return body

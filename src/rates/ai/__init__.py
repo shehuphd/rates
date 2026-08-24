@@ -1,5 +1,6 @@
 """The AI universe: model pricing, capabilities, and lifecycle."""
 
+from ._load import load
 from ._model import (
     Context,
     Lifecycle,
@@ -11,11 +12,9 @@ from ._model import (
     Reasoning,
     ReasoningLevel,
 )
-from ._load import load
 from ._registry import Registry, Source
 
 __all__ = [
-    "load",
     "Context",
     "Lifecycle",
     "Modalities",
@@ -27,4 +26,5 @@ __all__ = [
     "ReasoningLevel",
     "Registry",
     "Source",
+    "load",
 ]

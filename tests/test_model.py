@@ -60,10 +60,11 @@ DEEPSEEK = {
     "price_discrepancies": [
         {
             "field": "input_mtok",
-            "primary_source": "models_dev",
-            "primary_value": 0.55,
-            "conflicting_source": "genai_prices",
-            "conflicting_value": 0.21,
+            "chosen_source": "models_dev",
+            "chosen_value": 0.55,
+            "other_source": "genai_prices",
+            "other_value": 0.21,
+            "resolved_by": "preference",
             "difference_pct": 61.8,
         }
     ],
@@ -123,10 +124,11 @@ def test_partial_record_defaults_missing_fields_to_none():
 def test_discrepancy_record_parses():
     d = Model.from_dict(DEEPSEEK).price_discrepancies[0]
     assert d.field == "input_mtok"
-    assert d.primary_source == "models_dev"
-    assert d.primary_value == 0.55
-    assert d.conflicting_source == "genai_prices"
-    assert d.conflicting_value == 0.21
+    assert d.chosen_source == "models_dev"
+    assert d.chosen_value == 0.55
+    assert d.other_source == "genai_prices"
+    assert d.other_value == 0.21
+    assert d.resolved_by == "preference"
     assert d.difference_pct == 61.8
 
 
@@ -138,3 +140,9 @@ def test_price_get_returns_none_for_unit_the_model_does_not_bill_on():
 def test_currency_is_not_a_price_unit():
     m = Model.from_dict(OPUS_5)
     assert "currency" not in m.price.units
+
+
+def test_to_dict_round_trips_through_from_dict():
+    for record in (OPUS_5, DEEPSEEK):
+        m = Model.from_dict(record)
+        assert Model.from_dict(m.to_dict()) == m

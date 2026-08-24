@@ -6,6 +6,9 @@ on:
 
 jobs:
   publish:
+    # Version releases only (v1.0.0, ...); the weekly ledger releases
+    # (ledger-YYYY-MM-DD) must never reach PyPI.
+    if: startsWith(github.event.release.tag_name, 'v')
     runs-on: ubuntu-latest
     environment:
       name: pypi

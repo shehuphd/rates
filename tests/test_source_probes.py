@@ -126,7 +126,7 @@ def test_fallback_only_admissions_stay_consistent(token):
         "openrouter": normalize_openrouter(payloads["openrouter"]),
     }
     admitted = _admit_fallback_only(
-        normalized, primary_keys=set(normalized["models_dev"]), today="probe"
+        normalized, preferred_keys=set(normalized["models_dev"]), today="probe"
     )
     missing = [
         (m["provider"], m["id"])
@@ -137,6 +137,34 @@ def test_fallback_only_admissions_stay_consistent(token):
         f"{len(missing)} fallback-only models clear the admission bar but "
         f"aren't in the fused output, e.g. {missing[:5]}; the fusion owes "
         "them entries"
+    )
+
+
+def test_no_source_carries_a_currency_field(token):
+    """The fusion stamps every price as USD because no source publishes a
+    per-model currency today; that's an absence claim, so it gets a probe.
+    If a source starts carrying currency, this fails and the merge must
+    read it instead of assuming."""
+    models_dev = fetch_json(SOURCE_URLS["models_dev"])
+    sample = list(models_dev.get("anthropic", {}).get("models", {}).values())[:20]
+    assert sample and all(
+        "currency" not in (m.get("cost") or {}) for m in sample
+    ), "models.dev cost entries now carry a currency field; stop assuming USD"
+
+    genai = fetch_json(SOURCE_URLS["genai_prices"], token=token)
+    provider = next(p for p in genai if p.get("id") == "anthropic")
+    flat = [m for m in provider["models"] if isinstance(m.get("prices"), dict)]
+    assert flat and all(
+        "currency" not in m["prices"] for m in flat
+    ), "genai-prices now carries a currency field; stop assuming USD"
+
+    litellm = fetch_json(SOURCE_URLS["litellm"], token=token)
+    entries = [
+        v for v in litellm.values()
+        if isinstance(v, dict) and v.get("litellm_provider")
+    ][:50]
+    assert entries and all("currency" not in e for e in entries), (
+        "LiteLLM entries now carry a currency field; stop assuming USD"
     )
 
 

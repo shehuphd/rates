@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Optional
+from typing import Any
 
 
-def _parse_date(value: Optional[str]) -> Optional[date]:
+def _parse_date(value: str | None) -> date | None:
     """Parse an ISO date string, passing None through.
 
     Upstream sources sometimes carry partial dates ("2025-04", "2025");
@@ -39,16 +39,16 @@ class Price:
     model bills on several at once.
     """
 
-    currency: Optional[str]
+    currency: str | None
     units: dict[str, float] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Price":
+    def from_dict(cls, data: dict[str, Any]) -> Price:
         """Split the JSON's flat price object into currency and unit rates."""
         units = {k: v for k, v in data.items() if k != "currency"}
         return cls(currency=data.get("currency"), units=units)
 
-    def get(self, unit: str) -> Optional[float]:
+    def get(self, unit: str) -> float | None:
         """Rate for one unit, or None when the model doesn't bill on it."""
         return self.units.get(unit)
 
@@ -63,7 +63,7 @@ class PriceTier:
     price: dict[str, float] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "PriceTier":
+    def from_dict(cls, data: dict[str, Any]) -> PriceTier:
         when = data.get("when", {})
         return cls(
             when_dimension=when.get("dimension", ""),
@@ -74,28 +74,32 @@ class PriceTier:
 
 @dataclass(frozen=True)
 class PriceDiscrepancy:
-    """A recorded disagreement between the primary source and a fallback.
+    """A recorded disagreement between two sources on one price unit.
 
-    The primary's value is always what's in ``price``; this records that a
-    fallback source reported something more than 2% different (see ERD.md
-    for how that threshold was chosen).
+    ``chosen_source``/``chosen_value`` is what shipped in ``price``:
+    whichever source's underlying data changed more recently, or a fixed
+    preference order when freshness can't decide (see ARCHITECTURE.md §
+    Resolving price disagreements). ``resolved_by`` names which of the
+    two decided: ``"freshness"`` or ``"preference"``.
     """
 
     field: str
-    primary_source: str
-    primary_value: float
-    conflicting_source: str
-    conflicting_value: float
+    chosen_source: str
+    chosen_value: float
+    other_source: str
+    other_value: float
+    resolved_by: str
     difference_pct: float
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "PriceDiscrepancy":
+    def from_dict(cls, data: dict[str, Any]) -> PriceDiscrepancy:
         return cls(
             field=data["field"],
-            primary_source=data["primary_source"],
-            primary_value=data["primary_value"],
-            conflicting_source=data["conflicting_source"],
-            conflicting_value=data["conflicting_value"],
+            chosen_source=data["chosen_source"],
+            chosen_value=data["chosen_value"],
+            other_source=data["other_source"],
+            other_value=data["other_value"],
+            resolved_by=data["resolved_by"],
             difference_pct=data["difference_pct"],
         )
 
@@ -122,21 +126,23 @@ class Reasoning:
     the model, never a guessed False.
     """
 
-    control: Optional[str] = None
-    effort_parameter_required: Optional[bool] = None
+    control: str | None = None
+    effort_parameter_required: bool | None = None
     can_disable_reasoning: bool = False
     levels: tuple[ReasoningLevel, ...] = ()
-    range: Optional[tuple[int, int]] = None
-    budget: Optional[tuple[Optional[int], Optional[int]]] = None
-    default: Optional[str] = None
+    range: tuple[int, int] | None = None
+    budget: tuple[int | None, int | None] | None = None
+    default: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Reasoning":
+    def from_dict(cls, data: dict[str, Any]) -> Reasoning:
         levels = tuple(
             ReasoningLevel(label=lv["label"], rank=lv["rank"])
             for lv in data.get("levels", [])
         )
         raw_range = data.get("range")
+        if raw_range is not None and len(raw_range) < 2:
+            raw_range = None  # a range needs both ends; anything less is absent
         raw_budget = data.get("budget")
         return cls(
             control=data.get("control"),
@@ -158,12 +164,12 @@ class Lifecycle:
     """Whether a model is still viable to build on. ``deprecation_date`` can
     be past (already retired) or future (scheduled sunset, still callable)."""
 
-    status: Optional[str]
-    release_date: Optional[date] = None
-    deprecation_date: Optional[date] = None
+    status: str | None
+    release_date: date | None = None
+    deprecation_date: date | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Lifecycle":
+    def from_dict(cls, data: dict[str, Any]) -> Lifecycle:
         return cls(
             status=data.get("status"),
             release_date=_parse_date(data.get("release_date")),
@@ -179,7 +185,7 @@ class Modalities:
     output: tuple[str, ...] = ()
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Modalities":
+    def from_dict(cls, data: dict[str, Any]) -> Modalities:
         return cls(
             input=tuple(data.get("input", [])),
             output=tuple(data.get("output", [])),
@@ -190,11 +196,11 @@ class Modalities:
 class Context:
     """Token limits, split because input and output limits often differ."""
 
-    input: Optional[int] = None
-    output: Optional[int] = None
+    input: int | None = None
+    output: int | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Context":
+    def from_dict(cls, data: dict[str, Any]) -> Context:
         return cls(input=data.get("input"), output=data.get("output"))
 
 
@@ -205,18 +211,98 @@ class Model:
 
     provider: str
     id: str
-    family: Optional[str] = None
-    type: Optional[str] = None
+    family: str | None = None
+    type: str | None = None
     modalities: Modalities = field(default_factory=Modalities)
     context: Context = field(default_factory=Context)
-    tool_call: Optional[bool] = None
-    structured_output: Optional[bool] = None
+    tool_call: bool | None = None
+    structured_output: bool | None = None
     price: Price = field(default_factory=lambda: Price(currency=None))
     price_tiers: tuple[PriceTier, ...] = ()
     price_discrepancies: tuple[PriceDiscrepancy, ...] = ()
-    reasoning: Optional[Reasoning] = None
+    reasoning: Reasoning | None = None
     lifecycle: Lifecycle = field(default_factory=lambda: Lifecycle(status=None))
     sources: dict[str, str] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """The record in ERD.md's JSON shape, the inverse of from_dict:
+        price flat, dates ISO, absent facts omitted rather than nulled."""
+        record: dict[str, Any] = {"provider": self.provider, "id": self.id}
+        if self.family is not None:
+            record["family"] = self.family
+        if self.type is not None:
+            record["type"] = self.type
+        record["modalities"] = {
+            "input": list(self.modalities.input),
+            "output": list(self.modalities.output),
+        }
+        record["context"] = {"input": self.context.input, "output": self.context.output}
+        if self.tool_call is not None:
+            record["tool_call"] = self.tool_call
+        if self.structured_output is not None:
+            record["structured_output"] = self.structured_output
+
+        price: dict[str, Any] = {}
+        if self.price.currency is not None:
+            price["currency"] = self.price.currency
+        price.update(self.price.units)
+        record["price"] = price
+        if self.price_tiers:
+            record["price_tiers"] = [
+                {
+                    "when": {"dimension": t.when_dimension, "over": t.when_over},
+                    "price": dict(t.price),
+                }
+                for t in self.price_tiers
+            ]
+        record["price_discrepancies"] = [
+            {
+                "field": d.field,
+                "chosen_source": d.chosen_source,
+                "chosen_value": d.chosen_value,
+                "other_source": d.other_source,
+                "other_value": d.other_value,
+                "resolved_by": d.resolved_by,
+                "difference_pct": d.difference_pct,
+            }
+            for d in self.price_discrepancies
+        ]
+
+        if self.reasoning is not None:
+            r: dict[str, Any] = {}
+            if self.reasoning.control is not None:
+                r["control"] = self.reasoning.control
+            if self.reasoning.effort_parameter_required is not None:
+                r["effort_parameter_required"] = self.reasoning.effort_parameter_required
+            r["can_disable_reasoning"] = self.reasoning.can_disable_reasoning
+            r["levels"] = [
+                {"label": lv.label, "rank": lv.rank} for lv in self.reasoning.levels
+            ]
+            r["range"] = list(self.reasoning.range) if self.reasoning.range else None
+            if self.reasoning.budget is not None:
+                r["budget"] = {
+                    "min": self.reasoning.budget[0],
+                    "max": self.reasoning.budget[1],
+                }
+            if self.reasoning.default is not None:
+                r["default"] = self.reasoning.default
+            record["reasoning"] = r
+
+        record["lifecycle"] = {
+            "status": self.lifecycle.status,
+            "release_date": (
+                self.lifecycle.release_date.isoformat()
+                if self.lifecycle.release_date
+                else None
+            ),
+            "deprecation_date": (
+                self.lifecycle.deprecation_date.isoformat()
+                if self.lifecycle.deprecation_date
+                else None
+            ),
+        }
+        record["sources"] = dict(self.sources)
+        return record
 
     def price_for(self, **conditions: int) -> Price:
         """The effective price under the given conditions, e.g.
@@ -241,7 +327,7 @@ class Model:
         return Price(currency=self.price.currency, units=units)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Model":
+    def from_dict(cls, data: dict[str, Any]) -> Model:
         reasoning_data = data.get("reasoning")
         lifecycle_data = data.get("lifecycle")
         return cls(

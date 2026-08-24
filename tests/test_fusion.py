@@ -1,9 +1,11 @@
 """Tests for the fusion merge and per-source normalizers, against fixtures
 shaped like each source's live payload (verified 2026-08-22)."""
 
+from datetime import date
+
 import pytest
 
-from rates import AllSourcesUnreachableError, PrimarySourceUnavailableError
+from rates import AllSourcesUnreachableError, PreferredSourceUnavailableError
 from rates.ai import Registry
 from rates.ai._fusion import fetch_sources, fuse
 from rates.ai._sources import normalize_litellm, normalize_models_dev
@@ -50,6 +52,40 @@ MODELS_DEV = {
             },
         },
     },
+    "somehost": {
+        "id": "somehost",
+        "models": {
+            # No pricing at all: fails admission criterion 2.
+            "member-only": {
+                "id": "member-only",
+                "cost": {},
+                "modalities": {"input": ["text"], "output": ["text"]},
+                "reasoning": False,
+            },
+            # Free: an explicit zero is a carried value and survives.
+            "free-model": {
+                "id": "free-model",
+                "cost": {"input": 0, "output": 0},
+                "modalities": {"input": ["text"], "output": ["text"]},
+                "reasoning": False,
+            },
+            # Typed only via the bare-id route (LiteLLM lists it under a
+            # different provider).
+            "bare-typed": {
+                "id": "bare-typed",
+                "cost": {"input": 0.1, "output": 0.2},
+                "modalities": {},
+                "reasoning": False,
+            },
+            # LiteLLM's listings of this id disagree on mode: stays untyped.
+            "ambi": {
+                "id": "ambi",
+                "cost": {"input": 0.1, "output": 0.2},
+                "modalities": {},
+                "reasoning": False,
+            },
+        },
+    },
     "nvidia": {
         "id": "nvidia",
         "models": {
@@ -78,7 +114,7 @@ GENAI_PRICES = [
         "id": "anthropic",
         "models": [
             {"id": "claude-opus-5", "prices": {"input_mtok": 5, "output_mtok": 25}},
-            # Disagrees with the primary's 8 by well over 2%.
+            # Disagrees with the preferred source's 8 by well over 2%.
             {"id": "claude-2", "prices": {"input_mtok": 4}, "context_window": 100000},
         ],
     },
@@ -143,6 +179,18 @@ LITELLM = {
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 2e-06,
     },
+    "otherhost/bare-typed": {
+        "litellm_provider": "otherhost",
+        "mode": "embedding",
+    },
+    "hosta/ambi": {
+        "litellm_provider": "hosta",
+        "mode": "chat",
+    },
+    "hostb/ambi": {
+        "litellm_provider": "hostb",
+        "mode": "embedding",
+    },
 }
 
 OPENROUTER = {
@@ -200,13 +248,13 @@ def _model(fused, model_id):
 # Merge rules
 
 
-def test_primary_values_are_never_overwritten(fused):
+def test_preferred_values_ship_absent_a_disagreement(fused):
     opus = _model(fused, "claude-opus-5")
     assert opus["price"]["input_mtok"] == 5
     assert opus["price"]["cache_read_mtok"] == 0.5
 
 
-def test_fallback_fills_units_the_primary_lacks(fused):
+def test_fallback_fills_units_the_preferred_source_lacks(fused):
     opus = _model(fused, "claude-opus-5")
     assert opus["price"]["cache_write_1h_mtok"] == pytest.approx(10.0)
     assert "litellm" in opus["sources"]
@@ -222,20 +270,82 @@ def test_agreement_produces_no_discrepancy(fused):
     assert _model(fused, "claude-opus-5")["price_discrepancies"] == []
 
 
-def test_disagreement_past_threshold_is_recorded_and_primary_still_wins(fused):
+def test_disagreement_past_threshold_is_recorded_and_preference_still_wins(fused):
     claude2 = _model(fused, "claude-2")
     assert claude2["price"]["input_mtok"] == 8
     (d,) = claude2["price_discrepancies"]
-    assert d["primary_value"] == 8
-    assert d["conflicting_value"] == 4
+    assert d["chosen_value"] == 8
+    assert d["other_value"] == 4
+    assert d["resolved_by"] == "preference"
     assert d["difference_pct"] == 50.0
+
+
+def test_freshness_prefers_the_fallback_when_it_changed_more_recently():
+    fused = fuse(
+        _payloads(),
+        source_freshness={"genai_prices": date(2026, 6, 1)},
+        record_freshness=lambda provider, model_id: date(2026, 1, 1),
+    )
+    claude2 = _model(fused, "claude-2")
+    assert claude2["price"]["input_mtok"] == 4
+    (d,) = claude2["price_discrepancies"]
+    assert d["chosen_source"] == "genai_prices"
+    assert d["chosen_value"] == 4
+    assert d["other_source"] == "models_dev"
+    assert d["other_value"] == 8
+    assert d["resolved_by"] == "freshness"
+
+
+def test_freshness_keeps_the_preferred_source_when_it_changed_more_recently():
+    fused = fuse(
+        _payloads(),
+        source_freshness={"genai_prices": date(2026, 1, 1)},
+        record_freshness=lambda provider, model_id: date(2026, 6, 1),
+    )
+    claude2 = _model(fused, "claude-2")
+    assert claude2["price"]["input_mtok"] == 8
+    (d,) = claude2["price_discrepancies"]
+    assert d["chosen_source"] == "models_dev"
+    assert d["resolved_by"] == "freshness"
+
+
+def test_freshness_tie_falls_back_to_preference():
+    same = date(2026, 1, 1)
+    fused = fuse(
+        _payloads(),
+        source_freshness={"genai_prices": same},
+        record_freshness=lambda provider, model_id: same,
+    )
+    (d,) = _model(fused, "claude-2")["price_discrepancies"]
+    assert d["resolved_by"] == "preference"
+    assert d["chosen_source"] == "models_dev"
+
+
+def test_freshness_missing_the_preferred_dated_lookup_falls_back_to_preference():
+    fused = fuse(
+        _payloads(),
+        source_freshness={"genai_prices": date(2026, 6, 1)},
+        record_freshness=lambda provider, model_id: None,
+    )
+    (d,) = _model(fused, "claude-2")["price_discrepancies"]
+    assert d["resolved_by"] == "preference"
+
+
+def test_freshness_missing_the_fallback_source_date_falls_back_to_preference():
+    fused = fuse(
+        _payloads(),
+        source_freshness={},
+        record_freshness=lambda provider, model_id: date(2026, 6, 1),
+    )
+    (d,) = _model(fused, "claude-2")["price_discrepancies"]
+    assert d["resolved_by"] == "preference"
 
 
 def test_context_gap_filled_from_genai_prices(fused):
     assert _model(fused, "claude-2")["context"]["input"] == 100000
 
 
-def test_openrouter_fills_modalities_only_when_the_primary_has_none(fused):
+def test_openrouter_fills_modalities_only_when_the_preferred_source_has_none(fused):
     grok = _model(fused, "grok-4.3")
     assert grok["modalities"] == {"input": ["text"], "output": ["text"]}
     opus = _model(fused, "claude-opus-5")
@@ -257,7 +367,7 @@ def test_missing_status_means_active(fused):
     assert _model(fused, "claude-2")["lifecycle"]["status"] == "deprecated"
 
 
-# Reasoning shapes
+# Reasoning structures
 
 
 def test_effort_levels_rank_from_one_without_none(fused):
@@ -349,7 +459,7 @@ def test_tiers_travel_and_base_price_is_unchanged():
 # Admission of fallback-only models
 
 
-def test_two_agreeing_fallbacks_admit_a_model_the_primary_lacks(fused):
+def test_two_agreeing_fallbacks_admit_a_model_the_preferred_source_lacks(fused):
     m = _model(fused, "mistral-large")
     assert m["type"] == "chat"
     assert m["price"]["input_mtok"] == 2
@@ -368,6 +478,107 @@ def test_single_source_knowledge_does_not_admit(fused):
     assert all(m["id"] != "tiered-model" for m in fused["models"])
 
 
+# Admission criterion 2 on preferred-source records
+
+
+def test_priceless_preferred_records_are_dropped(fused):
+    assert all(m["id"] != "member-only" for m in fused["models"])
+
+
+def test_explicit_zero_pricing_survives(fused):
+    free = _model(fused, "free-model")
+    assert free["price"]["input_mtok"] == 0
+
+
+# Type via exact bare-id matching
+
+
+def test_bare_id_match_types_a_model_listed_under_another_provider(fused):
+    m = _model(fused, "bare-typed")
+    assert m["type"] == "embedding"
+    assert "litellm" in m["sources"]
+
+
+def test_disagreeing_listings_leave_the_id_untyped(fused):
+    assert _model(fused, "ambi")["type"] is None
+
+
+def test_openrouter_membership_implies_chat():
+    # A model no LiteLLM entry types, whose id OpenRouter lists.
+    models_dev = {
+        "somehost": {
+            "models": {
+                "or-only": {
+                    "id": "or-only",
+                    "cost": {"input": 0.5, "output": 1},
+                    "modalities": {},
+                    "reasoning": False,
+                }
+            }
+        }
+    }
+    openrouter = {
+        "data": [
+            {
+                "id": "router-z/or-only",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+            }
+        ]
+    }
+    fused = fuse(_payloads(models_dev=models_dev, openrouter=openrouter))
+    m = _model(fused, "or-only")
+    assert m["type"] == "chat"
+    assert "openrouter" in m["sources"]
+
+
+def test_direct_litellm_match_outranks_the_bare_id_routes(fused):
+    assert _model(fused, "claude-opus-5")["type"] == "chat"
+    assert "litellm" in _model(fused, "claude-opus-5")["sources"]
+
+
+# Reasoning enrichment via bare id
+
+
+def test_bare_id_reasoning_enrichment_when_listings_agree():
+    openrouter = {
+        "data": [
+            {
+                "id": "router-x/kimi-style",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                "reasoning": {"mandatory": True},
+            },
+            {
+                "id": "router-y/kimi-style",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                "reasoning": {"mandatory": True},
+            },
+        ]
+    }
+    fused = fuse(_payloads(openrouter=openrouter))
+    r = _model(fused, "kimi-style")["reasoning"]
+    assert r["effort_parameter_required"] is True
+
+
+def test_bare_id_reasoning_enrichment_stays_unknown_on_disagreement():
+    openrouter = {
+        "data": [
+            {
+                "id": "router-x/kimi-style",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                "reasoning": {"mandatory": True},
+            },
+            {
+                "id": "router-y/kimi-style",
+                "architecture": {"input_modalities": ["text"], "output_modalities": ["text"]},
+                "reasoning": {"mandatory": False},
+            },
+        ]
+    }
+    fused = fuse(_payloads(openrouter=openrouter))
+    r = _model(fused, "kimi-style")["reasoning"]
+    assert r.get("effort_parameter_required") is None
+
+
 # Degradation and envelope
 
 
@@ -382,8 +593,13 @@ def test_skipped_source_contributes_nothing_and_status_travels():
         },
     )
     opus = _model(fused, "claude-opus-5")
-    assert opus["type"] is None
+    # LiteLLM's own contributions are gone; type still arrives via
+    # OpenRouter membership, correctly attributed.
     assert "cache_write_1h_mtok" not in opus["price"]
+    assert opus["lifecycle"]["deprecation_date"] is None
+    assert opus["type"] == "chat" and "openrouter" in opus["sources"]
+    # A model no other source knows stays untyped.
+    assert _model(fused, "nemotron-nano")["type"] is None
     litellm = next(s for s in fused["sources"] if s["name"] == "litellm")
     assert litellm["status"] == "unreachable"
     assert litellm["fetched_at"] is None
@@ -486,9 +702,9 @@ def test_one_fallback_down_degrades_not_fails(monkeypatch):
     assert statuses["models_dev"] == "ok"
 
 
-def test_primary_down_refuses_a_hollow_result(monkeypatch):
+def test_preferred_source_down_refuses_a_hollow_result(monkeypatch):
     _patch_fetch(monkeypatch, failing={"models_dev"})
-    with pytest.raises(PrimarySourceUnavailableError):
+    with pytest.raises(PreferredSourceUnavailableError):
         fetch_sources()
 
 
@@ -499,3 +715,22 @@ def test_everything_down_raises_all_sources_unreachable(monkeypatch):
     )
     with pytest.raises(AllSourcesUnreachableError):
         fetch_sources()
+
+
+def test_litellm_price_disagreement_is_recorded_and_preference_wins():
+    litellm = dict(LITELLM)
+    litellm["claude-opus-5"] = {
+        **LITELLM["claude-opus-5"],
+        "input_cost_per_token": 6e-06,
+    }
+    result = fuse(_payloads(litellm=litellm))
+    opus = _model(result, "claude-opus-5")
+    assert opus["price"]["input_mtok"] == 5
+    (d,) = [
+        d for d in opus["price_discrepancies"]
+        if d["other_source"] == "litellm"
+    ]
+    assert d["field"] == "input_mtok"
+    assert d["other_value"] == pytest.approx(6.0)
+    assert d["chosen_source"] == "models_dev"
+    assert d["resolved_by"] == "preference"

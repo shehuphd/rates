@@ -1,8 +1,8 @@
 # Data model
 
-This document is the concrete schema for the AI universe (`rates.ai`). [ARCHITECTURE.md](ARCHITECTURE.md) covers why it's shaped this way; this covers what's actually in it.
+This document is the concrete schema for the AI universe (`rates.ai`). [ARCHITECTURE.md](ARCHITECTURE.md) covers why it's shaped this way; this covers what's in it.
 
-Every field here is a verified fact carried by at least one upstream source, never inferred opinion. Nothing in this schema ranks or scores a model. See "Excluded fields" below for what was considered and cut, and why.
+Every field here is carried by at least one upstream source. See "Excluded fields" below for what was considered and cut, and why.
 
 ## Entity relationships
 
@@ -25,8 +25,8 @@ erDiagram
     SOURCE {
         string name
         date fetched_at
-        string role "primary | fallback | validation"
-        string status "ok | unreachable | error"
+        string role "preferred | fallback | validation"
+        string status "ok | unreachable"
     }
     MODEL {
         string provider
@@ -39,6 +39,7 @@ erDiagram
         int context_output
         bool tool_call
         bool structured_output
+        map sources "contributing source to fetch date"
     }
     PRICE_ENTRY {
         string unit PK "e.g. input_mtok, output_per_second"
@@ -47,10 +48,11 @@ erDiagram
     }
     PRICE_DISCREPANCY {
         string field "e.g. input_mtok"
-        string primary_source
-        decimal primary_value
-        string conflicting_source
-        decimal conflicting_value
+        string chosen_source
+        decimal chosen_value
+        string other_source
+        decimal other_value
+        string resolved_by "freshness | preference"
         decimal difference_pct
     }
     PRICE_TIER {
@@ -59,10 +61,10 @@ erDiagram
         map price "unit-to-rate overrides"
     }
     REASONING {
-        string control "effort | budget_tokens | toggle"
+        string control "effort | budget_tokens | toggle | null"
         bool effort_parameter_required "true | false | unknown"
         bool can_disable_reasoning
-        string default_label
+        string default
         int_pair budget "min/max, budget_tokens only"
     }
     REASONING_LEVEL {
@@ -96,19 +98,20 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `provider` | string | models.dev | Raw provider identifier, e.g. `"anthropic"` |
 | `id` | string | models.dev | Provider's own model identifier |
 | `family` | string | models.dev | Lineage grouping, e.g. `"claude-opus"` |
-| `type` | string | LiteLLM `mode` | `chat`, `embedding`, `rerank`, `image_generation`, `image_edit`, `audio_speech`, `audio_transcription`, `video_generation`, `moderation`, or similar. Not derivable from modality alone, see below |
-| `modalities.input` / `.output` | string[] | models.dev, cross-checked against OpenRouter | Content formats, e.g. `["text", "image", "file"]` |
+| `type` | string | LiteLLM `mode` (provider+id match, or bare-id match where every listing agrees); OpenRouter membership implies `chat` | Values in the current snapshot: `chat`, `completion`, `responses`, `embedding`, `image_generation`, `audio_speech`, `audio_transcription`, `realtime`; the vocabulary is open (upstream also defines `rerank`, `moderation`, and others, none of which currently clear admission). Never derived from modality alone, see below. Coverage is partial; untyped models never match a type filter |
+| `modalities.input` / `.output` | string[] | models.dev, cross-checked against OpenRouter | Content formats, e.g. `["text", "image", "pdf"]` |
 | `context.input` / `.output` | int \| null | models.dev | Split, since input and output limits often differ |
-| `tool_call` | bool | models.dev | |
-| `structured_output` | bool | models.dev | |
+| `tool_call` | bool \| absent | models.dev | Absent means unknown, never `false`; a filter on it matches neither way |
+| `structured_output` | bool \| absent | models.dev | Same tri-state rule as `tool_call` |
 | `price` | `PRICE_ENTRY[]` | models.dev, gaps filled from LiteLLM/genai-prices | See below |
 | `price_discrepancies` | `PRICE_DISCREPANCY[]` | Computed during fusion | Empty when sources agree, not `null`. See below |
 | `reasoning` | `REASONING` \| null | models.dev, cross-checked against OpenRouter | Absent, not empty, when the model has no reasoning capability |
-| `lifecycle` | `LIFECYCLE` | genai-prices (bool) + LiteLLM (date) + models.dev (`status`) | See below |
+| `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-08-23", "litellm": "2026-08-23"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
+| `lifecycle` | `LIFECYCLE` | models.dev (`status`, `release_date`) + LiteLLM (`deprecation_date`) | See below |
 
 ### Why `type` is a separate field from `modalities`
 
-`modalities` describes the content format crossing the wire, text, image, audio, video, file. `type` describes what the API contract does with it. They correlate but neither derives from the other: Cohere's `rerank-english-v2.0` and OpenAI's `omni-moderation-2024-09-26` both show a text-in/text-shaped-out modality, the same shape a chat model has, while being a ranking operation and a classification operation respectively, not a conversation. A schema that only carried `modalities` would have no way to tell those apart from a chat model.
+`modalities` describes the content format crossing the wire, text, image, audio, video, file. `type` describes what the API contract does with it. They correlate but neither derives from the other: Cohere's `rerank-english-v2.0` and OpenAI's `omni-moderation-2024-09-26` both show a text-in/text-shaped-out modality, the same shape a chat model has, while being a ranking operation and a classification operation respectively, not a conversation. A schema that only carried `modalities` would have no way to tell those apart from a chat model. (Neither model ships in the current catalog, no source supplies per-unit pricing for them; they're here as the counterexample that rules the derivation out.)
 
 ## `PRICE_ENTRY`
 
@@ -120,8 +123,10 @@ Price is a flat map of unit name to rate, never a single blended number, and nev
 |---|---|---|
 | `input_mtok` / `output_mtok` | `claude-opus-5` | $5 / $25 per million tokens |
 | `cache_read_mtok` / `cache_write_mtok` | `claude-opus-5` | $0.50 / $6.25 per million tokens |
-| `web_search_per_kcount` | `claude-opus-5` | $10 per 1,000 searches |
-| `output_per_second` | `veo-3.1-fast-generate-preview` | $0.15 per second of generated video |
+| `requests_kcount` | `sonar` (Perplexity) | $12 per 1,000 requests |
+| `input_audio_mtok` | `gemini-2.5-flash` (aihubmix) | $1 per million audio tokens |
+
+`output_per_second` (per-second media billing) is also in the vocabulary; its current carriers are transcription models priced at zero, so it makes a poor illustration and a fine unit.
 
 A caller who wants a single comparable number (a "blended $/mtok," say) computes it themselves from the raw units and their own expected usage mix. Baking in a fixed input:output weighting was an earlier design choice, reverted, it assumed a usage ratio that isn't true for every caller.
 
@@ -139,60 +144,62 @@ Some providers reprice a model past a usage threshold, most commonly context siz
 ]
 ```
 
-Each tier's `price` holds only the units that change; unnamed units fall through to base. `when` is open-shaped: `context` is the only dimension upstream data carries today, and a future dimension (volume, batch) fits without schema change. On the caller side the tier is explicit opt-in, matching `price_unit`: `model.price` is the base tier, `model.price_for(context=500000)` resolves the applicable overrides into a flat price. `filter(price_max=...)` compares against base.
+Each tier's `price` holds only the units that change; unnamed units fall through to base. `when` is open-shaped: `context` is the only dimension upstream data carries today, and a dimension beyond it (volume, batch) fits without schema change. On the caller side the tier is explicit opt-in, matching `price_unit`: `model.price` is the base tier, `model.price_for(context=500000)` resolves the applicable overrides into a flat price. `filter(price_max=...)` compares against base.
 
 Covers all three upstream forms: models.dev's `tiers` list, its `context_over_200k` shorthand (a tier with `over: 200000`), and genai-prices' tiered list form.
 
 ## `PRICE_DISCREPANCY`
 
-Primary wins outright when sources disagree, models.dev's value is always what lands in `price`, no algorithmic tie-breaking. But the disagreement itself is a fact, not noise to discard: checked directly across genai-prices and models.dev on 355 model records where both describe the same provider and the same model, 93 (26%) disagreed by more than 1% on input price. Silently dropping that would hide something real, especially since the majority of `rates`' actual reads are against a static `ledger` file, generated once by a fusion run nobody watching the pipeline that week ever revisits, a warning at fusion time would never reach that reader. Stored on the record instead, it travels with the data.
+When sources disagree on a price, which value ships in `price` is decided by freshness first (whichever source's underlying data changed more recently for this record wins), falling back to a plain, editable per-field preference order when freshness can't decide. See ARCHITECTURE.md § Resolving price disagreements for the mechanism. The disagreement itself is stored either way, not discarded: checked directly across genai-prices and models.dev on 355 model records where both describe the same provider and the same model, 93 (26%) disagreed by more than 1% on input price. Silently dropping that would hide a verifiable fact, especially since the majority of reads against `rates` hit a static `ledger` file, generated once by a fusion run nobody watching the pipeline that week ever revisits, a warning at fusion time would never reach that reader. Stored on the record instead, it travels with the data.
 
-Concentrated, not random: of those 93 disagreements, 89 were on OpenRouter or open-weight community models (`qwen`, `deepseek`, `phi-4`, `mistral-small`). First-party stable APIs (Anthropic, Google, OpenAI called direct) showed zero disagreement in the same sample. Mostly staleness skew between two sources' fetch times on genuinely volatile, aggregator-routed pricing, not a dispute about a fixed fact.
+Concentrated, not random: of those 93 disagreements, 89 were on OpenRouter or open-weight community models (`qwen`, `deepseek`, `phi-4`, `mistral-small`). First-party stable APIs (Anthropic, Google, OpenAI called direct) showed zero disagreement in the same sample. Mostly staleness skew between two sources' fetch times on volatile, aggregator-routed pricing, not a dispute about a fixed fact.
 
-**Threshold: 2%**, grounded in that same check, clean agreement clustered at ≤1%, real disagreement started around 3-4% and climbed fast (many past 50%). 2% clears rounding/currency-conversion noise without missing genuine cases.
+**Threshold: 2%**, grounded in that same check, clean agreement clustered at ≤1%, substantive disagreement started around 3-4% and climbed fast (many past 50%). 2% clears rounding/currency-conversion noise without missing substantive cases.
 
 | Field | Type | Notes |
 |---|---|---|
 | `field` | string | Which price unit disagreed, e.g. `"input_mtok"` |
-| `primary_source` | string | Always `"models_dev"` currently, the source whose value is actually used |
-| `primary_value` | decimal | The value in `price`, i.e. what a caller actually gets |
-| `conflicting_source` | string | Which fallback source disagreed |
-| `conflicting_value` | decimal | What that source reported instead |
-| `difference_pct` | decimal | `abs(primary - conflicting) / max(abs(primary), abs(conflicting)) * 100` |
+| `chosen_source` | string | Which source's value shipped in `price` |
+| `chosen_value` | decimal | The value in `price`, i.e. what a caller gets |
+| `other_source` | string | Which source disagreed |
+| `other_value` | decimal | What that source reported instead |
+| `resolved_by` | string | `"freshness"` (the chosen source's data changed more recently) or `"preference"` (freshness couldn't decide; the per-field preference order settled it) |
+| `difference_pct` | decimal | `abs(chosen - other) / max(abs(chosen), abs(other)) * 100` |
 
-Real example, `deepseek/deepseek-chat-v3.1` on OpenRouter:
+A live example, `deepseek/deepseek-chat-v3.1` on OpenRouter:
 
 ```json
 {
   "field": "input_mtok",
-  "primary_source": "models_dev",
-  "primary_value": 0.55,
-  "conflicting_source": "genai_prices",
-  "conflicting_value": 0.21,
+  "chosen_source": "models_dev",
+  "chosen_value": 0.55,
+  "other_source": "genai_prices",
+  "other_value": 0.21,
+  "resolved_by": "preference",
   "difference_pct": 61.8
 }
 ```
 
 ## `REASONING`
 
-Reasoning-effort control differs enough across models that a single range doesn't fit all of them. Four shapes exist, all visible in xAI's Grok lineup alone:
+Reasoning-effort control differs enough across models that a single range doesn't fit all of them. Four forms exist, all visible in xAI's Grok lineup alone:
 
 | Shape | Example | `REASONING` record |
 |---|---|---|
 | No reasoning capability | `grok-4.20-0309-non-reasoning` | Absent entirely, the field doesn't apply |
-| Always-on, no dial | `grok-4.20-0309-reasoning` | Present, `levels: []`, `range: null` |
+| Always-on, no dial | `grok-4.20-0309-reasoning` | Present, `control: null`, `levels: []`, `range: null` |
 | Mandatory once engaged, no off switch | `claude-opus-5`, `grok-4.6` | `can_disable_reasoning: false`, `levels` starts at rank `1` |
-| Optional, `none` is a real selectable value | `grok-4.3` (`values: [none, low, medium, high]`) | `can_disable_reasoning: true`, `levels` starts at rank `0` |
+| Optional, `none` is a selectable value | `grok-4.3` (`values: [none, low, medium, high]`) | `can_disable_reasoning: true`, `levels` starts at rank `0` |
 
-`none` is never assumed present. It's included in `levels` exactly when a source lists it as a value the model actually accepts, never added as a universal floor.
+`none` is never assumed present. It's included in `levels` only when a source lists it as a value the model accepts, never added as a universal floor.
 
-**`control` names how the dial works**, because three genuinely different control types exist upstream: `"effort"` (named levels; `levels` and `range` apply), `"budget_tokens"` (a numeric thinking budget; `budget: {min, max}` applies, `levels` is empty), and `"toggle"` (on/off, nothing else; neither applies). One field per meaning, rather than `range` holding level ranks for one model and token budgets for another.
+**`control` names how the dial works**, because three different control types exist upstream: `"effort"` (named levels; `levels` and `range` apply), `"budget_tokens"` (a numeric thinking budget; `budget: {min, max}` applies, `levels` is empty), and `"toggle"` (on/off, nothing else; neither applies). One field per meaning, rather than `range` holding level ranks for one model and token budgets for another. `control` is `null` when a source says the model reasons but describes no dial at all (the always-on row above); roughly a quarter of shipped reasoning records are in that state.
 
-**`effort_parameter_required` is tri-state**: `true`/`false` where OpenRouter's per-model `reasoning.mandatory` covers the model (about 290 models; `true` means the API errors without the parameter), absent where no source carries it. Unknown is never reported as `false`, the same rule `tool_call` follows. OpenRouter's `default_effort` likewise fills `default` where available.
+**`effort_parameter_required` is tri-state**: `true`/`false` where OpenRouter's per-model `reasoning.mandatory` covers the model, by direct provider+id match or by bare model id where every OpenRouter listing of that id agrees (roughly 1,100 shipped records as of 2026-08-23; `true` means the API errors without the parameter), absent where no source carries it. Unknown is never reported as `false`, the same rule `tool_call` follows. OpenRouter's `default_effort` likewise fills `default` where available.
 
-Each entry in `levels` pairs a `label` (the string an API call actually needs) with a `rank` (its position in that model's own ascending order, for a caller doing arithmetic, "give me this model's cheapest reasoning setting," "give me the midpoint, rounded down"). The rank is only comparable within one model's own `levels`, `medium` on one model and `medium` on another aren't claimed to cost the same.
+Each entry in `levels` pairs a `label` (the string an API call needs) with a `rank` (its position in that model's own ascending order, for a caller doing arithmetic, "give me this model's cheapest reasoning setting," "give me the midpoint, rounded down"). The rank is only comparable within one model's own `levels`, `medium` on one model and `medium` on another aren't claimed to cost the same.
 
-`effort_parameter_required` and `can_disable_reasoning` are deliberately two separate booleans, not one. A model can require no explicit parameter (a default effort applies) while still never allowing reasoning to be switched off, `claude-opus-5` is exactly this case, `mandatory: false` upstream (the parameter is optional) but no `none` in its values (you can't disable it if you try).
+`effort_parameter_required` and `can_disable_reasoning` are deliberately two separate booleans, not one. A model can require no explicit parameter (a default effort applies) while still never allowing reasoning to be switched off, `claude-opus-5` is this very case, `mandatory: false` upstream (the parameter is optional) but no `none` in its values (you can't disable it if you try).
 
 ## `LIFECYCLE`
 
@@ -211,12 +218,12 @@ The one axis flagged as most important to get right: knowing whether a model is 
 | A fixed `dev`/`bulk`/`economy`/`quality` tier | Bakes in an opinion price alone can't establish, and required permanent hand-curation to stay correct. See [ARCHITECTURE.md](ARCHITECTURE.md) |
 | Blended `$/mtok` | Assumes a fixed input:output usage ratio that isn't true for every caller. Raw per-unit prices let the caller blend it themselves |
 | `benchmarks` (third-party Elo/index scores, available from OpenRouter) | Someone else's opinion of quality, not a fact about price or capability. `rates` is a pricing registry, not a benchmark aggregator |
-| `open_weights` | Deferred; not needed for this release |
-| Per-model `last_updated` | Mirrors the upstream source's sync cadence more than any real change to the model. Since `rates` ships dated, versioned snapshots, "did this change" is answered by diffing two releases, not by trusting a source's own timestamp of unclear meaning |
+| `open_weights` | Not carried; open-weight provenance isn't a pricing fact, and nothing in the current fusion supplies it |
+| Per-model `last_updated` | Mirrors the upstream source's sync cadence more than any change to the model itself. Since `rates` ships dated, versioned snapshots, "did this change" is answered by diffing two releases, not by trusting a source's own timestamp of unclear meaning |
 
 ## Worked example
 
-Values for `claude-opus-5`:
+The shipped record for `claude-opus-5` (ledger snapshot 2026-08-23):
 
 ```json
 {
@@ -224,7 +231,7 @@ Values for `claude-opus-5`:
   "id": "claude-opus-5",
   "family": "claude-opus",
   "type": "chat",
-  "modalities": { "input": ["text", "image", "file"], "output": ["text"] },
+  "modalities": { "input": ["text", "image", "pdf"], "output": ["text"] },
   "context": { "input": 1000000, "output": 128000 },
   "price": {
     "currency": "USD",
@@ -232,9 +239,9 @@ Values for `claude-opus-5`:
     "output_mtok": 25,
     "cache_read_mtok": 0.5,
     "cache_write_mtok": 6.25,
-    "cache_write_1h_mtok": 10,
-    "web_search_per_kcount": 10
+    "cache_write_1h_mtok": 10.0
   },
+  "price_tiers": [],
   "price_discrepancies": [],
   "reasoning": {
     "control": "effort",
@@ -248,29 +255,31 @@ Values for `claude-opus-5`:
       { "label": "max", "rank": 5 }
     ],
     "range": [1, 5],
+    "budget": null,
     "default": "high"
   },
   "tool_call": true,
   "structured_output": true,
-  "lifecycle": { "status": "active", "release_date": "2026-07-24", "deprecation_date": null },
-  "sources": { "models_dev": "2026-08-16", "genai_prices": "2026-08-16", "openrouter": "2026-08-16" }
+  "lifecycle": { "status": "active", "release_date": "2026-07-24", "deprecation_date": "2027-07-24" },
+  "sources": { "litellm": "2026-08-23", "models_dev": "2026-08-23", "openrouter": "2026-08-23" }
 }
 ```
 
-`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. `deepseek/deepseek-chat-v3.1` on OpenRouter is the case where they don't (same live fetch, 2026-08-22):
+`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. `deepseek/deepseek-chat-v3.1` on OpenRouter is the case where they don't (same snapshot; the record carries three disagreements, one shown here):
 
 ```json
 {
   "provider": "openrouter",
   "id": "deepseek/deepseek-chat-v3.1",
-  "price": { "currency": "USD", "input_mtok": 0.55 },
+  "price": { "currency": "USD", "input_mtok": 0.55, "output_mtok": 1.65, "cache_read_mtok": 0.55 },
   "price_discrepancies": [
     {
       "field": "input_mtok",
-      "primary_source": "models_dev",
-      "primary_value": 0.55,
-      "conflicting_source": "genai_prices",
-      "conflicting_value": 0.21,
+      "chosen_source": "models_dev",
+      "chosen_value": 0.55,
+      "other_source": "genai_prices",
+      "other_value": 0.21,
+      "resolved_by": "preference",
       "difference_pct": 61.8
     }
   ]

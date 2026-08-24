@@ -8,23 +8,24 @@ stated explicitly. Neither encodes a view on which model to pick.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass, replace
 from datetime import date
-from typing import Any, Callable, Iterator, Optional
+from typing import Any
 
 from ._model import Model, _parse_date
 
 # String fields matched case-insensitively, either whole-value (the bare
 # name) or substring (the *_contains spelling). "model" is the caller-facing
 # name for Model.id.
-_STRING_FIELDS = {
+_STRING_FIELDS: dict[str, Callable[[Model], str | None]] = {
     "model": lambda m: m.id,
     "provider": lambda m: m.provider,
     "family": lambda m: m.family,
     "type": lambda m: m.type,
 }
 
-_BOOL_FIELDS = {
+_BOOL_FIELDS: dict[str, Callable[[Model], bool | None]] = {
     "tool_call": lambda m: m.tool_call,
     "structured_output": lambda m: m.structured_output,
 }
@@ -51,12 +52,12 @@ class Source:
     whether it could be reached."""
 
     name: str
-    fetched_at: Optional[date] = None
-    role: Optional[str] = None
-    status: Optional[str] = None
+    fetched_at: date | None = None
+    role: str | None = None
+    status: str | None = None
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Source":
+    def from_dict(cls, data: dict[str, Any]) -> Source:
         return cls(
             name=data["name"],
             fetched_at=_parse_date(data.get("fetched_at")),
@@ -74,14 +75,14 @@ class Registry:
     envelope, so queries chain and the metadata is never discarded.
     """
 
-    schema_version: Optional[str] = None
+    schema_version: str | None = None
     universe: str = "ai"
-    snapshot_date: Optional[date] = None
+    snapshot_date: date | None = None
     sources: tuple[Source, ...] = ()
     models: tuple[Model, ...] = ()
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Registry":
+    def from_dict(cls, data: dict[str, Any]) -> Registry:
         return cls(
             schema_version=data.get("schema_version"),
             universe=data.get("universe", "ai"),
@@ -103,7 +104,7 @@ class Registry:
             units.update(m.price.units)
         return sorted(units)
 
-    def filter(self, **criteria: Any) -> "Registry":
+    def filter(self, **criteria: Any) -> Registry:
         """Narrow to models matching every supplied criterion.
 
         String criteria (``model``, ``provider``, ``family``, ``type``)
@@ -137,7 +138,7 @@ class Registry:
         )
         return replace(self, models=matched)
 
-    def sort_by(self, field_name: str, *, descending: bool) -> "Registry":
+    def sort_by(self, field_name: str, *, descending: bool) -> Registry:
         """Order models by one field, direction stated explicitly.
 
         ``field_name`` is a model attribute (``"id"``, ``"provider"``) or a
@@ -158,25 +159,25 @@ class Registry:
         return replace(self, models=ordered)
 
     def _predicate(
-        self, name: str, value: Any, price_unit: Optional[str]
+        self, name: str, value: Any, price_unit: str | None
     ) -> Callable[[Model], bool]:
         if name in _STRING_FIELDS:
             getter = _STRING_FIELDS[name]
             want = str(value).casefold()
             return lambda m: (
-                getter(m) is not None and getter(m).casefold() == want
+                (found := getter(m)) is not None and found.casefold() == want
             )
 
         if name.endswith("_contains") and name[: -len("_contains")] in _STRING_FIELDS:
             getter = _STRING_FIELDS[name[: -len("_contains")]]
             want = str(value).casefold()
             return lambda m: (
-                getter(m) is not None and want in getter(m).casefold()
+                (found := getter(m)) is not None and want in found.casefold()
             )
 
         if name in _BOOL_FIELDS:
-            getter = _BOOL_FIELDS[name]
-            return lambda m: getter(m) is value
+            bool_getter = _BOOL_FIELDS[name]
+            return lambda m: bool_getter(m) is value
 
         if name == "currency":
             want = str(value).casefold()
@@ -200,16 +201,16 @@ class Registry:
             want = str(value).casefold()
             return lambda m: want in (v.casefold() for v in m.modalities.output)
 
-        if name == "price_min":
+        if name in ("price_min", "price_max"):
+            # filter() already refused a price bound without a unit.
+            assert price_unit is not None
+            unit = price_unit
+            if name == "price_min":
+                return lambda m: (
+                    (rate := m.price.get(unit)) is not None and rate >= value
+                )
             return lambda m: (
-                m.price.get(price_unit) is not None
-                and m.price.get(price_unit) >= value
-            )
-
-        if name == "price_max":
-            return lambda m: (
-                m.price.get(price_unit) is not None
-                and m.price.get(price_unit) <= value
+                (rate := m.price.get(unit)) is not None and rate <= value
             )
 
         raise TypeError(
@@ -217,12 +218,19 @@ class Registry:
             + ", ".join(_valid_criteria())
         )
 
+    # Fields whose values order meaningfully; structured fields
+    # (modalities, reasoning, the whole price map) don't, and asking for
+    # one gets the hint below rather than a comparison crash.
+    _SORTABLE = frozenset({"provider", "id", "family", "type"})
+
     def _sort_value(self, model: Model, field_name: str) -> Any:
         if field_name.startswith("price."):
             return model.price.get(field_name[len("price."):])
-        if not hasattr(model, field_name):
+        if field_name not in self._SORTABLE:
             raise TypeError(
-                f"unknown sort field {field_name!r}; use a Model attribute "
-                'or "price.<unit>"'
+                f"can't sort by {field_name!r}; sortable fields: "
+                + ", ".join(sorted(self._SORTABLE))
+                + ', or a price unit as "price.<unit>" (e.g. '
+                '"price.input_mtok")'
             )
         return getattr(model, field_name)

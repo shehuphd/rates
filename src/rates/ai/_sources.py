@@ -6,13 +6,13 @@ source serves today, and returns partial model records keyed by
 merge itself lives in ``_fusion``; nothing here decides which source wins.
 
 Schema drift in these payloads is watched by live probes in the test
-suite, per CODING.md's capability-drift pattern; the shapes assumed here
-were verified against each source directly (2026-08-22).
+suite; the payload structures assumed here were verified against each
+source directly (2026-08-22).
 """
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 SOURCE_URLS = {
     "models_dev": "https://models.dev/api.json",
@@ -48,10 +48,10 @@ def _key(provider: str, model_id: str) -> tuple[str, str]:
     return provider.casefold(), model_id.casefold()
 
 
-def normalize_models_dev(data: dict[str, Any]) -> dict[tuple[str, str], dict]:
-    """models.dev: the primary. Providers keyed at the top level, models
+def normalize_models_dev(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    """models.dev: the preferred source. Providers keyed at the top level, models
     nested under each; prices already $/mtok."""
-    records: dict[tuple[str, str], dict] = {}
+    records: dict[tuple[str, str], dict[str, Any]] = {}
     for provider_id, provider in data.items():
         for model_id, m in provider.get("models", {}).items():
             cost = m.get("cost") or {}
@@ -87,7 +87,7 @@ def normalize_models_dev(data: dict[str, Any]) -> dict[tuple[str, str], dict]:
     return records
 
 
-def _reasoning_from_models_dev(m: dict[str, Any]) -> Optional[dict]:
+def _reasoning_from_models_dev(m: dict[str, Any]) -> dict[str, Any] | None:
     if not m.get("reasoning"):
         return None
     # effort_parameter_required has no models.dev source; it stays unknown
@@ -124,7 +124,7 @@ def _reasoning_from_models_dev(m: dict[str, Any]) -> Optional[dict]:
     return record
 
 
-def _tiers_from_models_dev(cost: dict[str, Any]) -> list[dict]:
+def _tiers_from_models_dev(cost: dict[str, Any]) -> list[dict[str, Any]]:
     """Both of models.dev's tier forms, as ERD.md price_tiers entries.
 
     The explicit ``tiers`` list wins when present; the ``context_over_200k``
@@ -157,9 +157,9 @@ def _tiers_from_models_dev(cost: dict[str, Any]) -> list[dict]:
     ]
 
 
-def normalize_genai_prices(data: list[dict]) -> dict[tuple[str, str], dict]:
+def normalize_genai_prices(data: list[dict[str, Any]]) -> dict[tuple[str, str], dict[str, Any]]:
     """genai-prices: prices already keyed in ERD.md's own unit vocabulary."""
-    records: dict[tuple[str, str], dict] = {}
+    records: dict[tuple[str, str], dict[str, Any]] = {}
     for provider in data:
         for m in provider.get("models", []):
             prices = m.get("prices")
@@ -198,11 +198,11 @@ def normalize_genai_prices(data: list[dict]) -> dict[tuple[str, str], dict]:
     return records
 
 
-def normalize_litellm(data: dict[str, Any]) -> dict[tuple[str, str], dict]:
+def normalize_litellm(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     """LiteLLM: flat entries, sometimes provider-prefixed, priced per
     single token (scaled here to $/mtok). Carries the ``mode`` field ERD.md
     maps to ``type``, and the only deprecation dates any source has."""
-    records: dict[tuple[str, str], dict] = {}
+    records: dict[tuple[str, str], dict[str, Any]] = {}
     for entry_key, m in data.items():
         if not isinstance(m, dict) or not m.get("litellm_provider"):
             continue
@@ -224,12 +224,12 @@ def normalize_litellm(data: dict[str, Any]) -> dict[tuple[str, str], dict]:
     return records
 
 
-def normalize_openrouter(data: dict[str, Any]) -> dict[tuple[str, str], dict]:
+def normalize_openrouter(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     """OpenRouter: chat-completion models only, ids as provider/model.
     Used for modality cross-checks and reasoning enrichment: its per-model
     ``reasoning`` object is the only source carrying ``mandatory`` (does
     the API error without the parameter?) and ``default_effort``."""
-    records: dict[tuple[str, str], dict] = {}
+    records: dict[tuple[str, str], dict[str, Any]] = {}
     for m in data.get("data", []):
         if "/" not in m.get("id", ""):
             continue

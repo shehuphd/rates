@@ -13,7 +13,7 @@ REGISTRY = {
         {
             "name": "models_dev",
             "fetched_at": "2026-08-22",
-            "role": "primary",
+            "role": "preferred",
             "status": "ok",
         }
     ],
@@ -104,7 +104,7 @@ def test_sort_by_rejects_positional_direction(registry):
 
 
 def test_sort_by_unknown_field_raises(registry):
-    with pytest.raises(TypeError, match="unknown sort field 'colour'"):
+    with pytest.raises(TypeError, match="can't sort by 'colour'"):
         registry.sort_by("colour", descending=False)
 
 
@@ -200,14 +200,15 @@ def test_criteria_combine_with_and_semantics(registry):
 
 def test_filter_then_sort_chains_and_keeps_envelope(registry):
     result = registry.filter(type="chat").sort_by("price.input_mtok", descending=False)
-    assert [m.id for m in result][0] == "claude-haiku-4-5"
-    assert [m.id for m in result][-1] == "gpt-4-32k"
+    ids = [m.id for m in result]
+    assert ids[0] == "claude-haiku-4-5"
+    assert ids[-1] == "gpt-4-32k"
     assert result.schema_version == "1.0.0"
 
 
 def test_sort_descending(registry):
     result = registry.filter(type="chat").sort_by("price.input_mtok", descending=True)
-    assert [m.id for m in result][0] == "gpt-4-32k"
+    assert next(m.id for m in result) == "gpt-4-32k"
 
 
 def test_sort_puts_models_without_the_field_last_in_both_directions(registry):

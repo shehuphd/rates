@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from rates import StaleLedgerWarning, SyncFallbackWarning
+from rates._http import FetchError
 from rates.ai import Registry, load
 from rates.ai import _load as load_module
-from rates._http import FetchError
 
 FRESH = {
     "schema_version": "1.0.0",
@@ -85,7 +85,15 @@ def fused_live(monkeypatch):
         return {"models_dev": {}}, {"models_dev": "ok"}
 
     monkeypatch.setattr(load_module, "fetch_sources", fake_fetch)
-    monkeypatch.setattr(load_module, "fuse", lambda payloads, statuses: dict(FRESH))
+    monkeypatch.setattr(
+        load_module, "gather_source_freshness", lambda statuses, timeout=None: {}
+    )
+    monkeypatch.setattr(
+        load_module, "record_freshness_lookup", lambda timeout=None: None
+    )
+    monkeypatch.setattr(
+        load_module, "fuse", lambda payloads, statuses, **kwargs: dict(FRESH)
+    )
     return calls
 
 
@@ -116,6 +124,30 @@ def test_corrupt_live_cache_refetches_instead_of_crashing(fused_live):
 def test_live_timeout_passes_through(fused_live):
     load(live=True, timeout=120)
     assert fused_live == [120]
+
+
+# The cache directory
+
+# Captured at import time, before the autouse isolation fixture replaces
+# the module attribute; this is the shipped function, not the test double.
+_REAL_CACHE_DIR = load_module.cache_dir
+
+
+def test_cache_dir_is_per_user_and_private(tmp_path, monkeypatch):
+    monkeypatch.setattr(load_module.Path, "home", lambda: tmp_path)
+    cache = _REAL_CACHE_DIR()
+    assert cache == tmp_path / ".cache" / "rates"
+    assert cache.stat().st_mode & 0o777 == 0o700
+
+
+def test_live_cache_written_by_an_incompatible_rates_version_refetches(fused_live):
+    load(live=True)
+    cache_path = load_module._live_cache_path()
+    envelope = json.loads(cache_path.read_text())
+    envelope["registry"]["schema_version"] = "9.0.0"
+    cache_path.write_text(json.dumps(envelope))
+    load(live=True)
+    assert len(fused_live) == 2
 
 
 # Sync tier
@@ -180,6 +212,77 @@ def test_sync_with_no_ledger_release_serves_local_quietly(bundled, monkeypatch):
         warnings.simplefilter("error")
         registry = load(sync=True)
     assert len(registry) == 1
+
+
+def test_sync_caches_the_download_and_reuses_it(bundled, monkeypatch):
+    old = (datetime.now(timezone.utc).date() - timedelta(days=10)).isoformat()
+    bundled["data"] = {**FRESH, "snapshot_date": old}
+    newer = {
+        **FRESH,
+        "models": [{"provider": "x", "id": "a"}, {"provider": "x", "id": "b"}],
+    }
+    downloads = []
+
+    def fake(url, timeout=None, token=None):
+        if "api.github.com" in url:
+            return [_release(FRESH["snapshot_date"])]
+        downloads.append(url)
+        return dict(newer)
+
+    monkeypatch.setattr(load_module, "fetch_json", fake)
+    assert len(load(sync=True)) == 2
+    assert len(load(sync=True)) == 2  # served from the sync cache this time
+    assert len(downloads) == 1
+
+
+def test_sync_compares_snapshots_via_the_release_tag(bundled, monkeypatch):
+    # Built one day, released the next: the tag carries the snapshot date,
+    # so the ledger must not look newer than its own content.
+    tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    downloads = []
+
+    def fake(url, timeout=None, token=None):
+        if "api.github.com" in url:
+            return [
+                {
+                    "tag_name": f"ledger-{FRESH['snapshot_date']}",
+                    "published_at": f"{tomorrow}T06:00:00Z",
+                    "assets": [
+                        {
+                            "name": "ledger-ai.json",
+                            "browser_download_url": "https://example.test/l.json",
+                        }
+                    ],
+                }
+            ]
+        downloads.append(url)
+        return {}
+
+    monkeypatch.setattr(load_module, "fetch_json", fake)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        registry = load(sync=True)
+    assert len(registry) == 1
+    assert downloads == []
+
+
+def test_sync_fallback_still_reports_a_stale_local_ledger(bundled, monkeypatch):
+    old = (datetime.now(timezone.utc).date() - timedelta(days=40)).isoformat()
+    bundled["data"] = {**FRESH, "snapshot_date": old}
+    _patch_sync_fetch(monkeypatch, FetchError("https://api.github.com/x: HTTP 403"))
+    with pytest.warns() as record:
+        load(sync=True)
+    categories = {w.category for w in record}
+    assert SyncFallbackWarning in categories
+    assert StaleLedgerWarning in categories
+
+
+def test_sync_with_no_newer_release_still_reports_staleness(bundled, monkeypatch):
+    old = (datetime.now(timezone.utc).date() - timedelta(days=40)).isoformat()
+    bundled["data"] = {**FRESH, "snapshot_date": old}
+    _patch_sync_fetch(monkeypatch, [_release(old)])
+    with pytest.warns(StaleLedgerWarning):
+        load(sync=True)
 
 
 def test_sync_schema_major_mismatch_warns_and_falls_back(bundled, monkeypatch):

@@ -7,19 +7,19 @@ deciding to the caller. The AI universe lives at ``rates.ai``.
 from ._errors import (
     AllSourcesUnreachableError,
     LiveFusionError,
-    PrimarySourceUnavailableError,
+    PreferredSourceUnavailableError,
     RatesError,
     RatesWarning,
     StaleLedgerWarning,
     SyncFallbackWarning,
 )
 
-__version__ = "0.0.3"
+__version__ = "1.0.0"
 
 __all__ = [
     "AllSourcesUnreachableError",
     "LiveFusionError",
-    "PrimarySourceUnavailableError",
+    "PreferredSourceUnavailableError",
     "RatesError",
     "RatesWarning",
     "StaleLedgerWarning",

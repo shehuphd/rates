@@ -19,8 +19,8 @@ class AllSourcesUnreachableError(LiveFusionError):
     """Every upstream source failed."""
 
 
-class PrimarySourceUnavailableError(LiveFusionError):
-    """The primary source specifically failed. Even with the fallbacks
+class PreferredSourceUnavailableError(LiveFusionError):
+    """The preferred source specifically failed. Even with the fallbacks
     healthy, the result would be missing most fields per ERD.md's source
     map, so it's refused rather than returned looking successful."""
 
