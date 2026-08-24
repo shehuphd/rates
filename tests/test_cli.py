@@ -298,6 +298,30 @@ def test_contains_flag_typo_suggests_the_contains_spelling(capsys):
     assert "Perhaps you meant `--model-contains`?" in err
 
 
+def test_bare_word_typo_still_suggests_a_dashed_flag(capsys):
+    code, err = _typo_run(capsys, "ai", "list", "help")
+    assert code == 2
+    assert "Perhaps you meant `--help`?" in err
+
+
+# Welcome screen
+
+
+def test_long_example_command_gets_its_own_line(capsys):
+    code, out, _ = run(capsys, "ai")
+    assert code == 0
+    lines = out.splitlines()
+    long_cmd = next(l for l in lines if "--price-unit input_mtok" in l)
+    assert long_cmd.strip().startswith("rates ai filter")
+    blurb_line = lines[lines.index(long_cmd) + 1]
+    # Its own line, not sharing the long command's line, and not
+    # indented out to the short commands' column (which would land
+    # mid-flag on the line above it).
+    assert "rates ai" not in blurb_line
+    assert blurb_line.strip() == "narrow by any fields"
+    assert not blurb_line.startswith(" " * 40)
+
+
 # Cross-universe (unscoped) sorting
 
 

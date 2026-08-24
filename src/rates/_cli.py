@@ -154,15 +154,19 @@ def _typo_hint(message: str, prog: str, known_flags: list[str]) -> str | None:
         return f"Perhaps you meant `{prog} {close[0]}`?" if close else None
 
     unrecognized = re.search(r"unrecognized arguments: (\S+)", message)
-    if unrecognized and unrecognized.group(1).startswith("--"):
+    if unrecognized:
         flag = unrecognized.group(1)
-        if flag in known_flags:
+        candidates = known_flags + ["--help"]
+        if flag in candidates:
             # Not a typo: a flag other verbs accept, aimed at one that
             # doesn't (show takes none of the query flags). Suggesting
             # the flag back at the user would read as a taunt.
             return f"{flag} doesn't apply to this command; --help lists what does."
-        close = difflib.get_close_matches(flag, known_flags, n=1, cutoff=0.5)
-        return f"Perhaps you meant `{close[0]}`?" if close else None
+        # Matched with leading dashes stripped, so a bare word ("help")
+        # still finds its dashed flag ("--help").
+        by_stem = {c.lstrip("-"): c for c in candidates}
+        close = difflib.get_close_matches(flag.lstrip("-"), by_stem, n=1, cutoff=0.5)
+        return f"Perhaps you meant `{by_stem[close[0]]}`?" if close else None
     return None
 
 
@@ -718,8 +722,11 @@ def _print_welcome(universe: str | None) -> None:
         if len(cmd) <= 42:
             print(f"  {cmd.ljust(width)}  {blurb}")
         else:
+            # Too long to share the short commands' column without
+            # crowding it: the command gets its own line, the blurb a
+            # plainly-indented one below rather than a false alignment.
             print(f"  {cmd}")
-            print(f"  {' ' * width}  {blurb}")
+            print(f"      {blurb}")
     print(
         "\nUse --help on any command for its full options.\n"
         "More: https://github.com/shehuphd/rates"
