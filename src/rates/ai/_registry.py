@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, replace
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
-from ._model import Model, _parse_date
+from ._model import Model, _parse_date, _parse_instant
 
 # String fields matched case-insensitively, either whole-value (the bare
 # name) or substring (the *_contains spelling). "model" is the caller-facing
@@ -49,10 +49,12 @@ def _valid_criteria() -> list[str]:
 @dataclass(frozen=True)
 class Source:
     """One upstream source consulted for a release, with its role and
-    whether it could be reached."""
+    whether it could be reached. ``fetched_at`` is a UTC instant, the event
+    of reaching the source; a day-granular value in an older ledger reads as
+    that day's midnight UTC."""
 
     name: str
-    fetched_at: date | None = None
+    fetched_at: datetime | None = None
     role: str | None = None
     status: str | None = None
 
@@ -60,7 +62,7 @@ class Source:
     def from_dict(cls, data: dict[str, Any]) -> Source:
         return cls(
             name=data["name"],
-            fetched_at=_parse_date(data.get("fetched_at")),
+            fetched_at=_parse_instant(data.get("fetched_at")),
             role=data.get("role"),
             status=data.get("status"),
         )
@@ -76,7 +78,7 @@ class Registry:
     """
 
     schema_version: str | None = None
-    universe: str = "ai"
+    domain: str = "ai"
     snapshot_date: date | None = None
     sources: tuple[Source, ...] = ()
     models: tuple[Model, ...] = ()
@@ -85,7 +87,7 @@ class Registry:
     def from_dict(cls, data: dict[str, Any]) -> Registry:
         return cls(
             schema_version=data.get("schema_version"),
-            universe=data.get("universe", "ai"),
+            domain=data.get("domain", "ai"),
             snapshot_date=_parse_date(data.get("snapshot_date")),
             sources=tuple(Source.from_dict(s) for s in data.get("sources", [])),
             models=tuple(Model.from_dict(m) for m in data.get("models", [])),
@@ -120,12 +122,19 @@ class Registry:
         has_bound = "price_min" in criteria or "price_max" in criteria
         if price_unit is not None and not has_bound:
             raise ValueError(
-                "price_unit has no effect without price_min or price_max"
+                "price_unit has no effect without price_min or price_max."
             )
         if has_bound and price_unit is None:
             raise ValueError(
-                "price_min/price_max need a price_unit to compare against; "
-                "units in this registry: " + ", ".join(self.price_units())
+                "price_min/price_max need a price_unit to compare against. "
+                "Units in this registry: " + ", ".join(self.price_units()) + "."
+            )
+        if price_unit is not None and price_unit not in self.price_units():
+            # Every model bills on some subset of this registry's units;
+            # a unit none of them carry would match nothing, silently.
+            raise ValueError(
+                f"{price_unit!r} isn't a price unit in this registry. "
+                "Units in this registry: " + ", ".join(self.price_units()) + "."
             )
 
         predicates = [
@@ -145,6 +154,24 @@ class Registry:
         price unit as ``"price.<unit>"`` (``"price.input_mtok"``). Models
         without a value for the field go last, in either direction.
         """
+        if field_name.startswith("price."):
+            unit = field_name[len("price."):]
+            if unit not in self.price_units():
+                # Checked once here, not inside _sort_value's per-model
+                # loop: a unit no model carries would otherwise sort
+                # everything into "missing" without ever saying why.
+                raise TypeError(
+                    f"{unit!r} isn't a price unit in this registry. "
+                    "Units in this registry: " + ", ".join(self.price_units()) + "."
+                )
+        elif field_name not in self._SORTABLE:
+            raise TypeError(
+                f"can't sort by {field_name!r}. Sortable fields: "
+                + ", ".join(sorted(self._SORTABLE))
+                + ', or a price unit as "price.<unit>" (e.g. '
+                '"price.input_mtok").'
+            )
+
         keyed: list[tuple[Any, Model]] = []
         missing: list[Model] = []
         for m in self.models:
@@ -214,8 +241,8 @@ class Registry:
             )
 
         raise TypeError(
-            f"unknown filter criterion {name!r}; valid criteria: "
-            + ", ".join(_valid_criteria())
+            f"unknown filter criterion {name!r}. Valid criteria: "
+            + ", ".join(_valid_criteria()) + "."
         )
 
     # Fields whose values order meaningfully; structured fields
@@ -224,13 +251,7 @@ class Registry:
     _SORTABLE = frozenset({"provider", "id", "family", "type"})
 
     def _sort_value(self, model: Model, field_name: str) -> Any:
+        # field_name is already validated once, up front in sort_by().
         if field_name.startswith("price."):
             return model.price.get(field_name[len("price."):])
-        if field_name not in self._SORTABLE:
-            raise TypeError(
-                f"can't sort by {field_name!r}; sortable fields: "
-                + ", ".join(sorted(self._SORTABLE))
-                + ', or a price unit as "price.<unit>" (e.g. '
-                '"price.input_mtok")'
-            )
         return getattr(model, field_name)

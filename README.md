@@ -1,6 +1,6 @@
 # rates
 
-A pricing registry and decision layer. One universe ships today: AI API rates, per-unit prices, capabilities, and lifecycle for 6,000+ models.
+A pricing registry and decision layer. One domain ships today: AI API rates, per-unit prices, capabilities, and lifecycle for 6,000+ models.
 
 ## Before you start
 
@@ -51,6 +51,10 @@ The full manual, CLI and Python API both, is [USAGE.md](https://github.com/shehu
 Provider pricing pages change often, aren't machine-readable, and don't answer the question a dev has mid-build: which option, for this job, at this budget. Several raw feeds exist ([models.dev](https://github.com/anomalyco/models.dev), [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM's model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), [OpenRouter](https://openrouter.ai/api/v1/models)), each missing pieces the others carry. `rates` fuses them into one schema rather than duplicating any single one, cross-validates prices between them, and ships the result as a dated, versioned snapshot none of them offer on their own.
 
 The registry holds what could be gathered with verifiable per-unit pricing; services whose pricing isn't published, isn't accessible, or isn't per-unit at all aren't listed. See [ARCHITECTURE.md](https://github.com/shehuphd/rates/blob/main/ARCHITECTURE.md) for the design, and [ERD.md](https://github.com/shehuphd/rates/blob/main/ERD.md) for the schema itself.
+
+## License
+
+`rates` is MIT licensed. The bundled ledger is derived from the upstream sources above, which carry their own licenses and terms; [NOTICE](https://github.com/shehuphd/rates/blob/main/NOTICE) reproduces their copyright notices and records what each one contributes.
 
 ---
 

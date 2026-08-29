@@ -1,7 +1,7 @@
 """rates: a pricing registry and decision layer.
 
 Exposes verified facts (price, capabilities, lifecycle) and leaves the
-deciding to the caller. The AI universe lives at ``rates.ai``.
+deciding to the caller. The AI domain lives at ``rates.ai``.
 """
 
 from ._errors import (
@@ -10,6 +10,7 @@ from ._errors import (
     PreferredSourceUnavailableError,
     RatesError,
     RatesWarning,
+    SourceUnreachableWarning,
     StaleLedgerWarning,
     SyncFallbackWarning,
 )
@@ -22,6 +23,7 @@ __all__ = [
     "PreferredSourceUnavailableError",
     "RatesError",
     "RatesWarning",
+    "SourceUnreachableWarning",
     "StaleLedgerWarning",
     "SyncFallbackWarning",
     "__version__",

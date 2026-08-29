@@ -3,7 +3,7 @@
 ``fuse()`` is a pure function over already-fetched payloads and, when
 supplied, already-fetched freshness data, the same merge whether run on
 our weekly schedule to produce a published ledger or by a caller's own
-process via ``load(live=True)``. ``fetch_sources()`` does the payload
+process via ``load(fetch="live")``. ``fetch_sources()`` does the payload
 network half, degrading per source rather than failing whole; freshness
 data (see ``_freshness.py``) is gathered separately by the caller and
 passed in, so ``fuse()`` itself never performs a network call on its own.
@@ -39,6 +39,10 @@ from ._sources import (
     normalize_openrouter,
 )
 
+# The first shipped schema. Provenance timestamps (source fetched_at, record
+# observed_at) are UTC instants; a day-only value in any earlier local ledger
+# still reads, floored to midnight UTC. _schema_compatible checks the major, so
+# a later additive field bumps the minor without breaking an older reader.
 SCHEMA_VERSION = "1.0.0"
 DISCREPANCY_THRESHOLD_PCT = 2.0
 
@@ -94,14 +98,14 @@ def fetch_sources(
 
     if all(status != "ok" for status in statuses.values()):
         raise AllSourcesUnreachableError(
-            f"none of the {len(SOURCE_URLS)} sources could be reached; "
-            f"last failure: {last_error}"
+            f"none of the {len(SOURCE_URLS)} sources could be reached. "
+            f"Last failure: {last_error}"
         )
     if statuses["models_dev"] != "ok":
         raise PreferredSourceUnavailableError(
-            "models.dev, rates' preferred source, couldn't be reached; a "
+            "models.dev, rates' preferred source, couldn't be reached. A "
             "result built from the fallbacks alone would be missing most "
-            "fields, so none is returned"
+            "fields, so none is returned."
         )
     return payloads, statuses
 
@@ -126,7 +130,11 @@ def fuse(
     travels in the envelope.
     """
     statuses = statuses or {name: "ok" for name in payloads}
-    today = datetime.now(timezone.utc).date().isoformat()
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+    # snapshot_date is the daily snapshot's calendar identity (a date);
+    # a source fetch is an event, stamped as a UTC instant.
+    fetched_instant = now.isoformat()
 
     normalized: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
     for name, normalize in _NORMALIZERS.items():
@@ -166,12 +174,12 @@ def fuse(
 
     return {
         "schema_version": SCHEMA_VERSION,
-        "universe": "ai",
+        "domain": "ai",
         "snapshot_date": today,
         "sources": [
             {
                 "name": name,
-                "fetched_at": today if statuses.get(name) == "ok" else None,
+                "fetched_at": fetched_instant if statuses.get(name) == "ok" else None,
                 "role": _ROLES[name],
                 "status": statuses.get(name, "unreachable"),
             }

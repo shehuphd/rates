@@ -1,11 +1,14 @@
-"""The AI universe's entry point: one ``load()``, three access tiers.
+"""The AI domain's entry point: one ``load()``, three access tiers.
 
-``load()`` reads the bundled ledger, zero network. ``load(sync=True)``
-checks GitHub's Releases API for a newer published ledger, falling back to
-the local one with a visible warning when the check can't complete, never
-raising. ``load(live=True)`` runs the full fusion against the raw sources,
-raising typed exceptions when it can't produce an honest result. All three
-return the same ``Registry``.
+``load()`` (``fetch="bundled"``, the default) resolves to the best
+snapshot already on this machine: the one installed with the package, or
+a newer one a prior ``fetch="stable"`` call already downloaded. Zero
+network. ``load(fetch="stable")`` checks GitHub's Releases API for a
+newer published ledger, falling back to the local one with a visible
+warning when the check can't complete, never raising.
+``load(fetch="live")`` runs the full fusion against the raw sources,
+raising typed exceptions when it can't produce an honest result. All
+three return the same ``Registry``.
 
 Every duration check here anchors to UTC, never local wall-clock time: a
 system's timezone shifting mid-session must not change when data reads as
@@ -20,13 +23,18 @@ import warnings
 from datetime import datetime, timedelta, timezone
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from .._errors import StaleLedgerWarning, SyncFallbackWarning
+from .. import _cache
+from .._errors import (
+    SourceUnreachableWarning,
+    StaleLedgerWarning,
+    SyncFallbackWarning,
+)
 from .._http import FetchError, fetch_json, validate_timeout
 from .._trace import traced
 from ._freshness import gather_source_freshness, record_freshness_lookup
-from ._fusion import SCHEMA_VERSION, fetch_sources, fuse
+from ._fusion import _ROLES, SCHEMA_VERSION, fetch_sources, fuse
 from ._registry import Registry
 
 STALENESS_THRESHOLD_DAYS = 28
@@ -40,34 +48,59 @@ _BUNDLED_LEDGER = "ledger-ai.json.gz"
 @traced("registry.load")
 def load(
     *,
-    sync: bool = False,
-    live: bool = False,
+    fetch: Literal["bundled", "stable", "live"] = "bundled",
     timeout: float | None = None,
+    force: bool = False,
 ) -> Registry:
-    """Load the AI universe's registry.
+    """Load the AI domain's registry.
 
-    ``sync`` and ``live`` are different promises and don't compose;
-    passing both raises. ``timeout`` (seconds, up to 300) applies to the
-    network tiers only.
+    ``fetch`` picks one of three tiers, not a combination: ``"bundled"``
+    (the default) is the best snapshot already on this machine, offline;
+    ``"stable"`` checks for a newer one we've published; ``"live"`` fuses
+    the raw sources directly. ``timeout`` (seconds, up to 300) applies to
+    the network tiers only. ``force`` skips ``"live"``'s 24-hour cache and
+    fuses fresh regardless of how recent the cached result is, for a
+    volatile domain (crypto, say) where "an hour old" is already wrong
+    after news moves a price; it's an error with any other ``fetch``, since
+    ``"bundled"`` and ``"stable"`` don't hold a cached result of their own
+    for it to bypass.
     """
-    if sync and live:
+    if fetch not in ("bundled", "stable", "live"):
         raise ValueError(
-            "sync and live are different promises and don't combine: "
-            "sync checks for our newer published ledger, live refetches "
-            "the raw sources; pick one"
+            f"fetch must be 'bundled', 'stable', or 'live', got {fetch!r}"
+        )
+    if force and fetch != "live":
+        raise ValueError(
+            "force only applies to fetch='live'; 'bundled' and 'stable' "
+            "don't cache a result for it to bypass"
         )
     validate_timeout(timeout)
-    if live:
-        return _load_live(timeout)
-    if sync:
-        return _load_sync(timeout)
-    return _load_ledger()
+    if fetch == "live":
+        return _load_live(timeout, force=force)
+    if fetch == "stable":
+        return _load_stable(timeout)
+    return _load_bundled()
 
 
-def _load_ledger() -> Registry:
-    data = _read_bundled()
-    _warn_if_stale(data.get("snapshot_date"))
-    return Registry.from_dict(data)
+def _load_bundled() -> Registry:
+    local = _best_local()
+    _warn_if_stale(local.get("snapshot_date"))
+    return Registry.from_dict(local)
+
+
+def _best_local() -> dict[str, Any]:
+    """The best snapshot already on this machine: the one installed with
+    the package, or a newer one a prior ``fetch="stable"`` call already
+    downloaded and cached. Shared by the bundled and stable tiers so a
+    successful stable fetch benefits both, not just the call that made
+    it."""
+    local = _read_bundled()
+    cached = _read_sync_cache()
+    if cached is not None and (cached.get("snapshot_date") or "") > (
+        local.get("snapshot_date") or ""
+    ):
+        local = cached
+    return local
 
 
 def _read_bundled() -> dict[str, Any]:
@@ -83,42 +116,61 @@ def _warn_if_stale(snapshot_date: str | None) -> None:
     age = (datetime.now(timezone.utc).date() - snapshot).days
     if age > STALENESS_THRESHOLD_DAYS:
         warnings.warn(
-            f"the bundled AI-pricing ledger is {age} days old "
+            f"the AI-pricing ledger is {age} days old "
             f"(snapshot {snapshot_date}); prices may have moved. "
-            "Refresh with rates.ai.load(sync=True) to fetch our newest "
-            "published ledger, or rates.ai.load(live=True) to fuse the "
-            "raw sources yourself; pip install -U rates also brings a "
-            "newer bundled ledger",
+            "Refresh with rates.ai.load(fetch='stable') to fetch our "
+            "newest published ledger, or rates.ai.load(fetch='live') to "
+            "fuse the raw sources yourself; pip install -U rates also "
+            "brings a newer bundled ledger",
             StaleLedgerWarning,
             stacklevel=3,
         )
 
 
-# Caches live in a per-user 0700 directory, never under a predictable
-# name in the world-shared temp root, where another local user could
-# pre-create the file and feed fabricated prices to everyone else.
+def _warn_unreachable_sources(statuses: dict[str, str]) -> None:
+    """Name any non-preferred source that ``fetch_sources`` couldn't
+    reach. By the time this runs the preferred source is known healthy
+    (its own absence raises upstream), so every unreachable source here is
+    a fallback whose fields may be absent from this fusion. A best-effort
+    tier reports what it's serving instead of failing silently."""
+    skipped = sorted(
+        name
+        for name, status in statuses.items()
+        if status != "ok" and _ROLES.get(name) != "preferred"
+    )
+    if not skipped:
+        return
+    warnings.warn(
+        f"fused without {', '.join(skipped)}: "
+        f"{'these sources were' if len(skipped) > 1 else 'this source was'} "
+        "unreachable, so the fields they enrich (model type, reasoning "
+        "defaults, whether a reasoning-effort parameter is required) may be "
+        "absent for some models. The result is otherwise complete; retry "
+        "later for full enrichment",
+        SourceUnreachableWarning,
+        stacklevel=3,
+    )
 
 
-def cache_dir() -> Path:
-    path = Path.home() / ".cache" / "rates"
-    path.mkdir(parents=True, exist_ok=True)
-    path.chmod(0o700)
-    return path
-
+# Caches live in a per-user 0700 directory (see rates._cache), never under
+# a predictable name in the world-shared temp root, where another local
+# user could pre-create the file and feed fabricated prices to everyone.
 
 # live: full fusion, cached per session for 24 hours
 
 
 def _live_cache_path() -> Path:
-    return cache_dir() / "live-ai.json"
+    return _cache.cache_dir() / "live-ai.json"
 
 
-def _load_live(timeout: float | None) -> Registry:
-    cached = _read_live_cache()
-    if cached is not None:
-        return Registry.from_dict(cached)
+def _load_live(timeout: float | None, force: bool = False) -> Registry:
+    if not force:
+        cached = _read_live_cache()
+        if cached is not None:
+            return Registry.from_dict(cached)
 
     payloads, statuses = fetch_sources(timeout=timeout)
+    _warn_unreachable_sources(statuses)
     fused = fuse(
         payloads,
         statuses,
@@ -155,23 +207,15 @@ def _read_live_cache() -> dict[str, Any] | None:
     return registry
 
 
-# sync: cheap freshness check against our own published releases
+# stable: cheap freshness check against our own published releases
 
 
 def _sync_cache_path() -> Path:
-    return cache_dir() / "sync-ai.json"
+    return _cache.cache_dir() / "sync-ai.json"
 
 
-def _load_sync(timeout: float | None) -> Registry:
-    # "Local" is the best ledger already on this machine: the bundled one,
-    # or a previously synced one when it's newer, so a repeat sync serves
-    # the earlier download instead of fetching the asset again.
-    local = _read_bundled()
-    cached = _read_sync_cache()
-    if cached is not None and (cached.get("snapshot_date") or "") > (
-        local.get("snapshot_date") or ""
-    ):
-        local = cached
+def _load_stable(timeout: float | None) -> Registry:
+    local = _best_local()
 
     try:
         fetched = _fetch_newer_ledger(local.get("snapshot_date"), timeout)

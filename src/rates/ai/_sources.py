@@ -1,4 +1,4 @@
-"""Per-source normalizers for the AI universe's fusion.
+"""Per-source normalizers for the AI domain's fusion.
 
 Each normalizer takes one upstream source's raw payload, in the shape that
 source serves today, and returns partial model records keyed by

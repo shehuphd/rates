@@ -1,8 +1,8 @@
 # Data model
 
-This document is the concrete schema for the AI universe (`rates.ai`). [ARCHITECTURE.md](ARCHITECTURE.md) covers why it's shaped this way; this covers what's in it.
+This document is the concrete schema for the AI domain (`rates.ai`). [ARCHITECTURE.md](ARCHITECTURE.md) covers why it's shaped this way; this covers what's in it.
 
-Every field here is carried by at least one upstream source. See "Excluded fields" below for what was considered and cut, and why.
+Every field here is carried by at least one upstream source, with one deliberate exception: `observed_at` is present on the record but unpopulated in the AI domain, reserved for a domain whose values are observed continuously (see its row below). See "Excluded fields" for what was considered and cut, and why.
 
 ## Entity relationships
 
@@ -19,12 +19,12 @@ erDiagram
 
     REGISTRY {
         string schema_version
-        string universe
+        string domain
         date snapshot_date
     }
     SOURCE {
         string name
-        date fetched_at
+        datetime fetched_at "UTC instant the source was reached"
         string role "preferred | fallback | validation"
         string status "ok | unreachable"
     }
@@ -40,6 +40,7 @@ erDiagram
         bool tool_call
         bool structured_output
         map sources "contributing source to fetch date"
+        datetime observed_at "UTC instant the value was observed; null for AI"
     }
     PRICE_ENTRY {
         string unit PK "e.g. input_mtok, output_per_second"
@@ -86,10 +87,10 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Semver of this document's shape, independent of the `rates` package version |
-| `universe` | string | `"ai"` for this universe |
-| `snapshot_date` | date | When this release was generated. This, not a per-model timestamp, is how "did this change" gets answered, by diffing two dated releases |
-| `sources` | `SOURCE[]` | Every upstream source consulted for this release, with its role and `status`. On a `ledger` release every source is expected `ok`; on a `live` call, `status` is how a caller sees that a source was skipped for being unreachable rather than silently missing |
+| `schema_version` | string | Semver of this document's shape, independent of the `rates` package version. A later additive field bumps the minor; a reader checks the major, so an older ledger still loads |
+| `domain` | string | `"ai"` for this domain |
+| `snapshot_date` | date | The daily snapshot's calendar identity: the value a `stable` check compares to find a newer release, and the date in its `ledger-YYYY-MM-DD` tag. A date, not an instant, because the AI ledger publishes once a day; a continuously-updated domain defines its own envelope. This, not a per-model timestamp, is how "did this change" gets answered for AI, by diffing two dated releases |
+| `sources` | `SOURCE[]` | Every upstream source consulted for this release, with its role and `status`. Each carries `fetched_at`, the UTC instant it was reached. On a `ledger` release every source is expected `ok`; on a `live` call, `status` is how a caller sees that a source was skipped for being unreachable rather than silently missing |
 
 ## `MODEL`
 
@@ -108,6 +109,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `reasoning` | `REASONING` \| null | models.dev, cross-checked against OpenRouter | Absent, not empty, when the model has no reasoning capability |
 | `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-08-23", "litellm": "2026-08-23"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
 | `lifecycle` | `LIFECYCLE` | models.dev (`status`, `release_date`) + LiteLLM (`deprecation_date`) | See below |
+| `observed_at` | datetime \| absent | Not supplied for AI | A UTC instant recording when this record's underlying value was observed upstream. Absent in the AI domain: list prices are announced, not observed to the second, and no source dates a price that finely. It exists on the record so a domain whose values move continuously (a market price) fills a stricter value into a field already present, rather than a later domain forcing a breaking change to add it. Distinct from the envelope's `snapshot_date` (a release's calendar identity) and from a source's `fetched_at` (when we reached the source): this is when the *value* was true |
 
 ### Why `type` is a separate field from `modalities`
 
@@ -219,7 +221,7 @@ The one axis flagged as most important to get right: knowing whether a model is 
 | Blended `$/mtok` | Assumes a fixed input:output usage ratio that isn't true for every caller. Raw per-unit prices let the caller blend it themselves |
 | `benchmarks` (third-party Elo/index scores, available from OpenRouter) | Someone else's opinion of quality, not a fact about price or capability. `rates` is a pricing registry, not a benchmark aggregator |
 | `open_weights` | Not carried; open-weight provenance isn't a pricing fact, and nothing in the current fusion supplies it |
-| Per-model `last_updated` | Mirrors the upstream source's sync cadence more than any change to the model itself. Since `rates` ships dated, versioned snapshots, "did this change" is answered by diffing two releases, not by trusting a source's own timestamp of unclear meaning |
+| Per-model `last_updated` (AI domain) | In the AI domain a source's per-model `last_updated` mirrors its own sync cadence more than any change to the model, so it isn't carried: the AI ledger ships dated, versioned snapshots, and "did this change" is answered by diffing two releases. This reasoning is specific to a domain whose prices are announced and change rarely. A domain whose values are observed continuously (a market price) records freshness per record through `observed_at` instead, a field the schema already carries for exactly that case |
 
 ## Worked example
 

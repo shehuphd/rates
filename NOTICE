@@ -1,0 +1,75 @@
+# Third-party notices
+
+`rates` fuses pricing and capability data from the upstream sources below. The
+bundled ledger shipped with this package (`src/rates/ai/ledger-ai.json.gz`), and
+any ledger produced by `rates.ai.load(fetch="live")`, are derived from them.
+
+Each record's `sources` map names which of these contributed to it, and the
+registry envelope lists every source consulted for a given snapshot.
+
+## models.dev
+
+<https://models.dev> · <https://github.com/anomalyco/models.dev>
+
+Used as the preferred source: provider and model identifiers, families,
+modalities, context limits, per-unit prices, tool-call and structured-output
+support, reasoning shape, and lifecycle status.
+
+Copyright (c) 2025 models.dev
+
+Licensed under the MIT license, reproduced below.
+
+## genai-prices
+
+<https://github.com/pydantic/genai-prices>
+
+Used to cross-validate prices, and to fill context limits and price tiers the
+preferred source lacks.
+
+Copyright (c) Pydantic Services Inc. 2025 to present
+
+Licensed under the MIT license, reproduced below.
+
+## LiteLLM
+
+<https://github.com/BerriAI/litellm>
+
+Used for model type, deprecation dates, and prices the preferred source lacks.
+The file consumed is `model_prices_and_context_window.json` at the repository
+root, which the repository's LICENSE places under the MIT license; the separate
+terms covering that repository's `enterprise/` directory don't apply to it.
+
+Copyright (c) 2023 Berri AI
+
+Licensed under the MIT license, reproduced below.
+
+## OpenRouter
+
+<https://openrouter.ai>
+
+Used for whether a reasoning-effort parameter is required, per-model default
+effort, and modality and type coverage the other sources lack. The endpoint
+consumed is the public model catalog at `https://openrouter.ai/api/v1/models`.
+OpenRouter publishes no license file for it; its terms of service govern.
+
+## The MIT license
+
+Applies to models.dev, genai-prices, and LiteLLM as named above.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

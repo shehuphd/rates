@@ -1,4 +1,4 @@
-"""Build a fresh AI-universe ledger from the live sources.
+"""Build a fresh AI-domain ledger from the live sources.
 
 Writes two artifacts: ledger-ai.json (plain, attached to the GitHub
 Release so dated snapshots stay diffable) and the gzipped copy bundled

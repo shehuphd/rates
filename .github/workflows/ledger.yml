@@ -55,5 +55,5 @@ jobs:
           TAG="ledger-$(date -u +%F)"
           gh release create "$TAG" ledger-ai.json \
             --title "$TAG" \
-            --notes "Weekly AI-universe pricing ledger, snapshot $(date -u +%F)." \
+            --notes "Weekly AI-domain pricing ledger, snapshot $(date -u +%F)." \
             --latest=false

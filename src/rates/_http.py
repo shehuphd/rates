@@ -10,7 +10,7 @@ save a fast user a few seconds would guarantee-fail the slow user these
 numbers are for) and escalates from there. Server-side transient failures
 (429, 5xx) retry with backoff, since those resolve on the server's
 schedule. Clean errors (404, malformed JSON) never retry; no wait fixes
-those. A volatile universe (forex, say) can later override the ladder and
+those. A volatile domain (forex, say) can later override the ladder and
 statuses as its own profile; the mechanism stays this one.
 """
 

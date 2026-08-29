@@ -45,7 +45,7 @@ def pytest_sessionfinish(session, exitstatus):
 def isolated_rates_cache(tmp_path, monkeypatch):
     """Every test gets its own rates cache dir; nothing touches the
     developer's own ~/.cache/rates."""
-    from rates.ai import _load
+    from rates import _cache
 
     cache = tmp_path / "rates-cache"
 
@@ -53,7 +53,10 @@ def isolated_rates_cache(tmp_path, monkeypatch):
         cache.mkdir(parents=True, exist_ok=True)
         return cache
 
-    monkeypatch.setattr(_load, "cache_dir", fake_cache_dir)
+    # Every caller reads _cache.cache_dir() through the module, so one patch
+    # redirects the live/sync caches, the freshness cache, and the completion
+    # cache together.
+    monkeypatch.setattr(_cache, "cache_dir", fake_cache_dir)
     return cache
 
 

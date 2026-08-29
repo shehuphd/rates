@@ -154,9 +154,9 @@ def _latest_commit_date(atom_bytes: bytes) -> date | None:
 
 
 def _cache_path() -> Path:
-    from ._load import cache_dir  # deferred: avoids a circular import
+    from .. import _cache
 
-    return cache_dir() / "freshness.json"
+    return _cache.cache_dir() / "freshness.json"
 
 
 def _read_cache(url: str) -> date | None:

@@ -7,7 +7,7 @@ from rates.ai import Registry
 
 REGISTRY = {
     "schema_version": "1.0.0",
-    "universe": "ai",
+    "domain": "ai",
     "snapshot_date": "2026-08-22",
     "sources": [
         {
@@ -91,6 +91,11 @@ def test_price_unit_alone_raises(registry):
 def test_price_bound_without_unit_raises_listing_this_registrys_units(registry):
     with pytest.raises(ValueError, match="input_mtok.*output_per_second"):
         registry.filter(price_max=5.00)
+
+
+def test_price_bound_with_an_unknown_unit_raises_not_silently_zero(registry):
+    with pytest.raises(ValueError, match="'input_mt' isn't a price unit"):
+        registry.filter(price_max=1, price_unit="input_mt")
 
 
 def test_sort_by_requires_explicit_direction(registry):

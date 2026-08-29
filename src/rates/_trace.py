@@ -12,24 +12,58 @@ Verified against traceact 1.0.0's public API (traced_action) on
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from typing import Any, TypeVar, cast
 
 F = TypeVar("F", bound=Callable[..., Any])
 
-try:
-    from traceact import traced_action as _traced_action
-except ImportError:
-    _traced_action = None  # type: ignore[assignment]
+# traceact's import chain is ~100ms (it pulls urllib/http/email for its
+# sinks), so importing it is deferred to the first call of a traced
+# function, never at module import. A process that never runs a traced
+# function, tab completion above all, never pays for it. `_UNRESOLVED`
+# means "not looked up yet"; None means "looked up, traceact absent"; a
+# callable is traceact's traced_action. Tests monkeypatch this to None to
+# exercise the absent path, so the sentinel must not overwrite that.
+_UNRESOLVED: Any = object()
+_traced_action: Any = _UNRESOLVED
+
+
+def _resolve_traced_action() -> Callable[..., Any] | None:
+    global _traced_action
+    if _traced_action is _UNRESOLVED:
+        try:
+            from traceact import traced_action
+
+            _traced_action = traced_action
+        except ImportError:
+            _traced_action = None
+    return cast("Callable[..., Any] | None", _traced_action)
 
 
 def traced(action: str, **kwargs: Any) -> Callable[[F], F]:
-    """traceact's traced_action when available, identity otherwise."""
-    if _traced_action is None:
-        return lambda fn: fn
-    return cast(
-        "Callable[[F], F]", _traced_action(action, project="rates", **kwargs)
-    )
+    """traceact's traced_action when available, identity otherwise. The
+    traceact lookup happens on the wrapped function's first call, not at
+    decoration time, so importing this module stays cheap."""
+
+    def decorator(fn: F) -> F:
+        wrapped: Callable[..., Any] | None = None
+
+        @functools.wraps(fn)
+        def lazy(*args: Any, **call_kwargs: Any) -> Any:
+            nonlocal wrapped
+            if wrapped is None:
+                impl = _resolve_traced_action()
+                wrapped = (
+                    fn
+                    if impl is None
+                    else impl(action, project="rates", **kwargs)(fn)
+                )
+            return wrapped(*args, **call_kwargs)
+
+        return cast("F", lazy)
+
+    return decorator
 
 
 def configure_cli_tracing() -> None:
@@ -42,7 +76,7 @@ def configure_cli_tracing() -> None:
     configured its own; an app's configure() always wins. Library imports
     never touch tracing config at all.
     """
-    if _traced_action is None:
+    if _resolve_traced_action() is None:
         return
     from pathlib import Path
 

@@ -1,4 +1,4 @@
-"""The rates CLI: one filter primitive, presets over it, universes as
+"""The rates CLI: one filter primitive, presets over it, domains as
 positional scope.
 
 Flags mirror the Python API one-to-one (``--model-contains opus`` is
@@ -18,14 +18,16 @@ import sys
 from collections.abc import Callable, Iterator, Sequence
 from typing import Any, NoReturn
 
-from ._errors import RatesError
+from ._domains import DOMAINS as DOMAIN_SPECS
+from ._errors import LiveFusionError, RatesError
+from ._record import Record
 from ._trace import configure_cli_tracing, traced
 
-# Per-universe spec, all data-driven: adding a universe means adding an
+# Per-domain spec, all data-driven: adding a domain means adding an
 # entry here, not new parsing code. `filter_flags` maps CLI flag names to
 # filter() keyword names; `core` marks the flags usable in an unscoped
-# (cross-universe) query, per the core-vs-per-universe field split.
-UNIVERSES: dict[str, dict[str, Any]] = {
+# (cross-domain) query, per the core-vs-per-domain field split.
+DOMAINS: dict[str, dict[str, Any]] = {
     "ai": {
         "tagline": "AI model pricing, capabilities, and lifecycle",
         "description": (
@@ -46,11 +48,6 @@ UNIVERSES: dict[str, dict[str, Any]] = {
             ),
             ("rates ai info", "how fresh the data is, and where it came from"),
         ],
-        # The core layer's neutral name for the identity field is "id";
-        # each universe names its own criterion for it ("model" here —
-        # quantum has no models, cloud sells services, so the AI word
-        # never appears in unscoped vocabulary).
-        "identity_kw": "model",
         "string_flags": {
             "model": {"core": False},
             "provider": {"core": True},
@@ -84,33 +81,98 @@ UNIVERSES: dict[str, dict[str, Any]] = {
     },
 }
 
-CORE_COLUMNS = [
-    ("UNIVERSE", lambda u, m: u),
-    ("PROVIDER", lambda u, m: m.provider),
+# Cross-domain columns read only the neutral Record contract, so mypy
+# verifies they never reach for a field one domain has and another lacks.
+CORE_COLUMNS: list[tuple[str, Callable[[str, Record], str]]] = [
+    ("DOMAIN", lambda u, m: u),
+    ("PROVIDER", lambda u, m: m.provider or ""),
     ("ID", lambda u, m: m.id),
-    ("CURRENCY", lambda u, m: m.price.currency or ""),
+    ("TYPE", lambda u, m: m.type or ""),
     ("STATUS", lambda u, m: m.lifecycle.status or ""),
+    ("RATE", lambda u, m: _fmt_domain_rate(m.price, DOMAIN_SPECS[u].rate_units)),
 ]
 
 VERBS = ("list", "filter", "search", "show", "info")
 DEFAULT_LIMIT = 20
 
 
+def _error_label() -> str:
+    """"Error:" in red on a color-capable terminal, plain otherwise: one
+    word, not the whole message, so the eye has something to land on
+    without the line turning into noise. The bright variant (91), not
+    the base 16-color red (31), which renders duller on most terminal
+    themes, the same reasoning as _warning_label's bright yellow. Off
+    for a piped/redirected stderr (raw escape codes in a log or a grep
+    are worse than none), and honors the NO_COLOR convention
+    (https://no-color.org)."""
+    if sys.stderr.isatty() and not os.environ.get("NO_COLOR"):
+        return "\033[91mError:\033[0m"
+    return "Error:"
+
+
+def _green(text: str) -> str:
+    """Green on a color-capable terminal, the same gating as
+    _error_label: off for piped/redirected stdout, honors NO_COLOR."""
+    if sys.stdout.isatty() and not os.environ.get("NO_COLOR"):
+        return f"\033[32m{text}\033[0m"
+    return text
+
+
+def _warning_label() -> str:
+    """"Warning:" in yellow on a color-capable terminal, plain otherwise:
+    the same treatment as _error_label, a different color so a warning
+    (execution continued, serving the local ledger) doesn't read at a
+    glance like an error (execution stopped). The bright variant (93),
+    not the base 16-color yellow (33), which renders duller and closer
+    to olive on most terminal themes."""
+    if sys.stderr.isatty() and not os.environ.get("NO_COLOR"):
+        return "\033[93mWarning:\033[0m"
+    return "Warning:"
+
+
 def _nonnegative_int(value: str) -> int:
     parsed = int(value)
     if parsed < 0:
         raise argparse.ArgumentTypeError(
-            f"--limit takes 0 (show all) or a positive count, got {parsed}"
+            "--limit only takes 0 (show all) or a positive integer"
         )
     return parsed
 
 
-def _loader(universe: str) -> Callable[..., Any]:
-    if universe == "ai":
-        from rates.ai import load
+def _loader(domain: str) -> Callable[..., Any]:
+    return DOMAIN_SPECS[domain].load
 
-        return load
-    raise KeyError(universe)
+
+def _timed_load(domain: str, args: argparse.Namespace) -> Any:
+    """The default (bundled) read is instant, nothing to announce;
+    --fetch stable/live make a network call that can run several seconds
+    on a slow connection, and a command that goes silent for that long
+    reads as hung. A one-line notice before it starts, and how long it
+    took once it's back, both on stderr so stdout stays clean for
+    pipes."""
+    tiers = DOMAIN_SPECS[domain].fetch_tiers
+    requested = args.fetch or "bundled"
+    if requested not in tiers:
+        raise RatesError(
+            f"the {domain} domain has no {requested!r} tier; it supports "
+            f"{', '.join(tiers)}. "
+            + (
+                f"Use --fetch {tiers[-1]}."
+                if args.fetch is None
+                else f"Choose one of {', '.join(tiers)}."
+            )
+        )
+    if args.fetch is None:
+        return _loader(domain)(fetch="bundled", timeout=args.timeout, force=args.force)
+    import time
+
+    verb = "Checking live rates" if args.fetch == "live" else "Checking for a newer ledger"
+    print(f"{verb}...", file=sys.stderr)
+    started = time.monotonic()
+    registry = _loader(domain)(fetch=args.fetch, timeout=args.timeout, force=args.force)
+    elapsed = time.monotonic() - started
+    print(f"Done in {elapsed:.1f}s.", file=sys.stderr)
+    return registry
 
 
 def _fmt_rate(rate: float | None) -> str:
@@ -119,26 +181,209 @@ def _fmt_rate(rate: float | None) -> str:
     return f"{rate:g}"
 
 
-# Parser construction, generated from the universe spec
+def _fmt_domain_rate(price: Any, headline: Sequence[str]) -> str:
+    """A record's own price, in its own domain's units, for an unscoped
+    listing's RATE column. Reaches for the domain's headline units first
+    (input/output per-token for ai); a record missing both of those still
+    gets every unit it does carry rather than a blank cell, since every
+    admitted record has at least one (see ARCHITECTURE.md § admission
+    criteria) and an existing price with nowhere to show is worse than a
+    slightly longer cell."""
+    present = [u for u in headline if u in price.units]
+    units = present if present else sorted(price.units)
+    return ", ".join(f"${_fmt_rate(price.units[u])}/{u}" for u in units)
+
+
+# Parser construction, generated from the domain spec
 
 
 class _Parser(argparse.ArgumentParser):
-    """argparse with a typo hint: the first unrecognized verb or flag gets
-    fuzzy-matched (stdlib difflib) against what's valid in this scope, and
-    one "Perhaps you meant ...?" line rides along with the error. Nothing
-    is suggested when nothing is plausibly close."""
+    """argparse with a short error, not the multi-line usage block: a
+    mistake specific enough to name (a missing value, a bad choice, two
+    conflicting flags) doesn't call for a dozen lines of usage the
+    reader has to scan past to find what went wrong. The usage block is
+    one `--help` away instead, named on the last line, so nothing is
+    lost, just not forced on every mistake. argparse's own message
+    text is also translated into a plain sentence (see _humanize): its
+    raw message forms are terse and technical ("invalid choice",
+    "expected one argument"), built for the parser library's own
+    internal use, not for a human to read as the final word. A typo
+    suggestion, when the unrecognized verb or flag fuzzy-matches
+    (stdlib difflib) something valid in this scope, rides along on its
+    own line; nothing is suggested when nothing is plausibly close."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.known_flags: list[str] = []
 
     def error(self, message: str) -> NoReturn:
-        self.print_usage(sys.stderr)
-        lines = [f"{self.prog}: error: {message}"]
-        hint = _typo_hint(message, self.prog, self.known_flags)
-        if hint:
-            lines.append(hint)
-        self.exit(2, "\n".join(lines) + "\n")
+        sentence, detail = _humanize(message, self)
+        blocks = [f"{_error_label()} {sentence}."]
+        if detail:
+            blocks.append(detail)
+        typo_hint = _typo_hint(message, self.prog, self.known_flags)
+        if typo_hint:
+            blocks.append(typo_hint)
+        blocks.append("Use --help for the full option list.")
+        # A blank line around each block: several short paragraphs read
+        # faster than one dense one, especially with a long value list
+        # in the mix.
+        self._print_message("\n" + "\n\n".join(blocks) + "\n\n", sys.stderr)
+        self.exit(2)
+
+
+# A flag's `type=` callable, mapped to a plain-language description of
+# the value it expects; anything not listed (plain strings) has no
+# useful kind to name beyond what the flag's own --help text already
+# says. Extend this if a future flag's type isn't self-explanatory.
+_TYPE_HINTS: dict[Any, str] = {
+    float: "a number",
+    _nonnegative_int: "a whole number, 0 or higher",
+}
+
+# Registry.filter()'s own exceptions are written in the Python API's
+# kwarg vocabulary (price_unit=...), correct for a caller using the
+# library directly. The CLI speaks in --dashed-flags; left untranslated,
+# a bare "price_unit" in an error reads as something to type verbatim
+# rather than the flag it spells.
+_CLI_FLAG_SPELLING = {
+    "price_unit": "--price-unit",
+    "price_min": "--price-min",
+    "price_max": "--price-max",
+}
+
+
+def _cli_facing(message: str) -> str:
+    import re
+
+    return re.sub(
+        r"\b(" + "|".join(_CLI_FLAG_SPELLING) + r")\b",
+        lambda m: _CLI_FLAG_SPELLING[m.group(1)],
+        message,
+    )
+
+
+# Markers where a Registry exception's message carries a comma-separated
+# list (every valid unit, every sortable field) tacked onto the end of its
+# first sentence. Split there so the list reads as its own paragraph
+# instead of running on from the sentence that names the mistake.
+_DETAIL_MARKERS = ("Units in this registry:", "Sortable fields:")
+
+
+def _registry_error_blocks(message: str) -> list[str]:
+    for marker in _DETAIL_MARKERS:
+        idx = message.find(marker)
+        if idx != -1:
+            return [message[:idx].rstrip(), message[idx:]]
+    return [message]
+
+
+def _print_cli_error(message: str, *, hint: str | None = None) -> None:
+    """Print a Registry/RatesError exception in the same block-spaced shape
+    as an argparse error (see _Parser.error): the sentence naming the
+    mistake, its value list as a separate paragraph when the message
+    carries one, an optional extra hint (e.g. a --fetch live failure
+    pointing at the other tiers), and a closing --help pointer, each with
+    a blank line around it."""
+    primary, *rest = _registry_error_blocks(_cli_facing(message))
+    blocks = [f"{_error_label()} {primary}", *rest]
+    if hint:
+        blocks.append(hint)
+    blocks.append("Use --help for the full option list.")
+    sys.stderr.write("\n" + "\n\n".join(blocks) + "\n\n")
+
+
+def _kind_of(action: argparse.Action | None) -> str | None:
+    """A short type description for a flag's expected value ('a
+    number'), or None when it's a free-form string, or a fixed set of
+    choices (see _value_choices for that case, listed out in full
+    rather than described)."""
+    if action is None:
+        return None
+    return _TYPE_HINTS.get(action.type)
+
+
+def _value_choices(action: argparse.Action | None) -> str | None:
+    """Every valid value for a flag, comma-joined, when the set is
+    small and known: argparse's own choices=, or --price-unit's, whose
+    vocabulary isn't fixed at parse time like a choices= flag but can
+    be listed in full anyway, read the same cheap way tab completion
+    already does, no full Registry load."""
+    if action is None:
+        return None
+    if action.choices:
+        return ", ".join(str(c) for c in action.choices)
+    if action.dest == "price_unit":
+        try:
+            units = _candidates("ai").get("price_units") or []
+        except (OSError, ValueError, KeyError, ImportError):
+            units = []
+        return ", ".join(units) if units else None
+    return None
+
+
+def _humanize(message: str, parser: argparse.ArgumentParser) -> tuple[str, str | None]:
+    """argparse's own error text is terse and technical, built for a
+    parser library's internal use, not a human reading it once. This
+    CLI's argparse vocabulary is small and fully known ahead of time,
+    so each shape it can produce gets its own plain sentence here
+    rather than passing the raw message through. Returns the primary
+    sentence (no leading capital or trailing period; the caller
+    supplies both) and, only for --price-unit's full list of valid
+    units, a second string long enough to read as its own paragraph
+    rather than crammed onto the end of the first line."""
+    import re
+
+    choice = re.search(
+        r"argument (\S+): invalid choice: '([^']+)' \(choose from (.+)\)", message
+    )
+    if choice:
+        option, bad, raw_choices = choice.groups()
+        choices = ", ".join(re.findall(r"'([^']+)'", raw_choices))
+        subject = "a command" if option == "verb" else option
+        sentence = f"{bad!r} isn't valid for {subject}, choose from: {choices}"
+        if option == "--fetch":
+            # bundled has no --fetch spelling of its own (see
+            # _add_common_flags): naming it here is the only place a
+            # --fetch typo would otherwise look like a two-choice flag.
+            sentence += ", or leave it out for the bundled ledger"
+        return sentence, None
+
+    expected = re.search(r"argument (\S+): expected \S+ arguments?", message)
+    if expected:
+        option = expected.group(1)
+        action = parser._option_string_actions.get(option)
+        possible = _value_choices(action)
+        if possible:
+            return f"{option} needs a value", f"Possible values: {possible}."
+        kind = _kind_of(action)
+        return f"{option} needs a value" + (f": {kind}" if kind else ""), None
+
+    exclusive = re.search(r"argument (\S+): not allowed with argument (\S+)", message)
+    if exclusive:
+        first, second = exclusive.groups()
+        return f"{first} can't be used together with {second}", None
+
+    unrecognized = re.search(r"unrecognized arguments: (.+)", message)
+    if unrecognized:
+        return f"{unrecognized.group(1)!r} wasn't expected here", None
+
+    bad_value = re.search(r"argument (\S+): invalid \S+ value: '([^']+)'", message)
+    if bad_value:
+        option, bad = bad_value.groups()
+        kind = _kind_of(parser._option_string_actions.get(option))
+        return (
+            f"{bad!r} isn't a valid value for {option}"
+            + (f", expected {kind}" if kind else ""),
+            None,
+        )
+
+    # A flag's own custom validator (e.g. _nonnegative_int) already
+    # raised a full, specific message; strip argparse's "argument --x: "
+    # wrapper and pass it through rather than replace it with something
+    # more generic.
+    generic = re.search(r"argument \S+: (.+)", message)
+    return (generic.group(1) if generic else message), None
 
 
 def _typo_hint(message: str, prog: str, known_flags: list[str]) -> str | None:
@@ -149,7 +394,7 @@ def _typo_hint(message: str, prog: str, known_flags: list[str]) -> str | None:
     if choice:
         candidates = re.findall(r"'([^']+)'", choice.group(2))
         if prog == "rates":
-            candidates += list(UNIVERSES)
+            candidates += list(DOMAINS)
         close = difflib.get_close_matches(choice.group(1), candidates, n=1, cutoff=0.5)
         return f"Perhaps you meant `{prog} {close[0]}`?" if close else None
 
@@ -161,7 +406,7 @@ def _typo_hint(message: str, prog: str, known_flags: list[str]) -> str | None:
             # Not a typo: a flag other verbs accept, aimed at one that
             # doesn't (show takes none of the query flags). Suggesting
             # the flag back at the user would read as a taunt.
-            return f"{flag} doesn't apply to this command; --help lists what does."
+            return f"{flag} doesn't apply to this command. See --help for what does."
         # Matched with leading dashes stripped, so a bare word ("help")
         # still finds its dashed flag ("--help").
         by_stem = {c.lstrip("-"): c for c in candidates}
@@ -183,20 +428,23 @@ def _add_common_flags(parser: argparse.ArgumentParser, query: bool = True) -> No
                             help="omit the header row (for awk/cut pipelines)")
     parser.add_argument("--json", action="store_true",
                         help="emit records as JSON in the ledger's own shape")
-    tier = parser.add_mutually_exclusive_group()
-    tier.add_argument("--sync", action="store_true",
-                      help="check for our newer published ledger first")
-    tier.add_argument("--live", action="store_true",
-                      help="fuse the raw sources directly instead of the ledger")
+    parser.add_argument(
+        "--fetch", choices=["stable", "live"], metavar="TIER",
+        help="stable: check for our newer published snapshot; "
+             "live: fuse the raw sources directly, right now "
+             "(omit for the bundled ledger, no network)",
+    )
+    parser.add_argument("--force", action="store_true",
+                        help="with --fetch live, skip the 24-hour cache and fuse fresh")
     parser.add_argument("--timeout", type=float, metavar="SECONDS",
-                        help="network timeout for --sync/--live (up to 300)")
+                        help="network timeout for --fetch stable/live (up to 300)")
 
 
 def _add_filter_flags(
     parser: argparse.ArgumentParser, spec: dict[str, Any], core_only: bool
 ) -> None:
     if core_only:
-        # The neutral identity flag; each universe maps it to its own
+        # The neutral identity flag; each domain maps it to its own
         # criterion via identity_kw.
         parser.add_argument("--id", metavar="VALUE",
                             help="exact identifier (case-insensitive)")
@@ -222,10 +470,10 @@ def _add_filter_flags(
         parser.add_argument(f"--{name}", type=float, metavar="N")
 
 
-def _build_parser(universe: str | None) -> argparse.ArgumentParser:
-    prog = "rates" if universe is None else f"rates {universe}"
-    spec = UNIVERSES[universe] if universe else UNIVERSES["ai"]
-    core_only = universe is None
+def _build_parser(domain: str | None) -> argparse.ArgumentParser:
+    prog = "rates" if domain is None else f"rates {domain}"
+    spec = DOMAINS[domain] if domain else DOMAINS["ai"]
+    core_only = domain is None
 
     from rates import __version__
 
@@ -273,11 +521,11 @@ def _build_parser(universe: str | None) -> argparse.ArgumentParser:
 
 
 def _criteria_from_args(
-    args: argparse.Namespace, spec: dict[str, Any], core_only: bool
+    args: argparse.Namespace, spec: dict[str, Any], core_only: bool, identity_kw: str
 ) -> dict[str, Any]:
     criteria: dict[str, Any] = {}
     if core_only:
-        identity = spec["identity_kw"]
+        identity = identity_kw
         if getattr(args, "id", None) is not None:
             criteria[identity] = args.id
         if getattr(args, "id_contains", None) is not None:
@@ -310,19 +558,19 @@ def _criteria_from_args(
 # Execution
 
 
-def _run_query(universe: str, args: argparse.Namespace) -> int:
-    spec = UNIVERSES[universe]
-    registry = _loader(universe)(
-        sync=args.sync, live=args.live, timeout=args.timeout
-    )
+def _run_query(domain: str, args: argparse.Namespace) -> int:
+    spec = DOMAINS[domain]
+    registry = _timed_load(domain, args)
 
     if args.verb == "info":
-        return _render_info({universe: registry}, args.json)
+        return _render_info({domain: registry}, args.json)
 
     if args.verb == "show":
         return _render_show(registry, args.id, as_json=args.json)
 
-    criteria = _criteria_from_args(args, spec, core_only=False)
+    criteria = _criteria_from_args(
+        args, spec, core_only=False, identity_kw=DOMAIN_SPECS[domain].identity_kw
+    )
     if args.verb == "search":
         result = _search(registry, spec, args.phrase, criteria)
     else:
@@ -360,54 +608,52 @@ def _print_json(payload: Any) -> None:
 
 def _run_unscoped(args: argparse.Namespace) -> int:
     if args.verb == "info":
-        registries = {
-            u: _loader(u)(sync=args.sync, live=args.live, timeout=args.timeout)
-            for u in UNIVERSES
-        }
+        registries = {u: _timed_load(u, args) for u in DOMAINS}
         return _render_info(registries, args.json)
 
     if args.verb == "show":
-        # A show is a point lookup; run it against every universe that
+        # A show is a point lookup; run it against every domain that
         # knows the id.
-        for universe in UNIVERSES:
-            registry = _loader(universe)(
-                sync=args.sync, live=args.live, timeout=args.timeout
-            )
+        for domain in DOMAINS:
+            registry = _timed_load(domain, args)
             code = _render_show(registry, args.id, missing_ok=True, as_json=args.json)
             if code == 0:
                 return 0
-        print(f"no model matching {args.id!r} in any universe", file=sys.stderr)
+        print(
+            f"{_error_label()} no model matching {args.id!r} in any domain.",
+            file=sys.stderr,
+        )
         return 1
 
     rows: list[tuple[str, Any]] = []
-    for universe, spec in UNIVERSES.items():
-        registry = _loader(universe)(
-            sync=args.sync, live=args.live, timeout=args.timeout
+    for domain, spec in DOMAINS.items():
+        registry = _timed_load(domain, args)
+        criteria = _criteria_from_args(
+            args, spec, core_only=True, identity_kw=DOMAIN_SPECS[domain].identity_kw
         )
-        criteria = _criteria_from_args(args, spec, core_only=True)
         if args.verb == "search":
             result = _search(registry, spec, args.phrase, criteria)
         else:
             result = registry.filter(**criteria)
-        rows.extend((universe, m) for m in result)
+        rows.extend((domain, m) for m in result)
 
     rows = _apply_unscoped_sort(rows, args)
     print(
-        f"core fields shown across universes; scope to one "
-        f"(e.g. rates ai {args.verb} ...) for its full fields",
+        f"core fields shown across domains; scope to one "
+        f"(e.g., rates ai {args.verb} ...) for its full fields",
         file=sys.stderr,
     )
 
     if args.json:
         _print_json(
             [
-                {"universe": u, **m.to_dict()}
+                {"domain": u, **m.to_dict()}
                 for u, m in _limited(rows, args.limit)
             ]
         )
         return 0
     columns = [(h, _bind_pair(getter)) for h, getter in CORE_COLUMNS]
-    _render_table(columns, rows, args.limit, no_header=args.no_header)
+    _render_table(columns, rows, args.limit, no_header=args.no_header, highlight_last=True)
     return 0
 
 
@@ -455,15 +701,15 @@ def _require_direction(args: argparse.Namespace) -> None:
     if not (args.ascending or args.descending):
         raise ValueError(
             "--sort-by needs a direction: pass --ascending or "
-            "--descending (no field has a default direction)"
+            "--descending (no field has a default direction)."
         )
 
 
-# What all universes share, so what an unscoped query can sort on. The
+# What all domains share, so what an unscoped query can sort on. The
 # identity field goes by its neutral name "id" here; "model" is one
-# universe's word for it, not the core layer's.
+# domain's word for it, not the core layer's.
 _CORE_SORT_KEYS: dict[str, Callable[[tuple[str, Any]], Any]] = {
-    "universe": lambda row: row[0],
+    "domain": lambda row: row[0],
     "provider": lambda row: row[1].provider,
     "id": lambda row: row[1].id,
     "currency": lambda row: row[1].price.currency or "",
@@ -474,8 +720,8 @@ _CORE_SORT_KEYS: dict[str, Callable[[tuple[str, Any]], Any]] = {
 def _apply_unscoped_sort(
     rows: list[tuple[str, Any]], args: argparse.Namespace
 ) -> list[tuple[str, Any]]:
-    """One global sort over the pooled rows, never per-universe blocks
-    concatenated: a $0.90 row from one universe must not rank below a
+    """One global sort over the pooled rows, never per-domain blocks
+    concatenated: a $0.90 row from one domain must not rank below a
     $0.99 row from another just because of iteration order."""
     if not args.sort_by:
         return rows
@@ -484,9 +730,9 @@ def _apply_unscoped_sort(
     if key is None:
         raise ValueError(
             f"unscoped queries sort by core fields only "
-            f"({', '.join(sorted(_CORE_SORT_KEYS))}); scope to a universe "
-            f"(rates ai {args.verb} ...) to sort by its own fields, "
-            f"{args.sort_by!r} included if it has one"
+            f"({', '.join(sorted(_CORE_SORT_KEYS))}). Scope to a domain "
+            f"(e.g., rates ai {args.verb} ...) to sort by its own fields, "
+            f"{args.sort_by!r} included if it has one."
         )
     return sorted(rows, key=key, reverse=args.descending)
 
@@ -499,6 +745,7 @@ def _render_table(
     rows: list[Any],
     limit: int,
     no_header: bool = False,
+    highlight_last: bool = False,
 ) -> None:
     shown = _limited(rows, limit)
     grid = [[str(getter(row)) for _, getter in columns] for row in shown]
@@ -511,10 +758,19 @@ def _render_table(
     if not no_header:
         print("  ".join(_cell(h, w) for h, w in zip(headers, widths)).rstrip())
     for r in grid:
-        print("  ".join(_cell(cell, w) for cell, w in zip(r, widths)).rstrip())
+        # Width and truncation (_cell) always run on the plain text first;
+        # color wraps the already-sized cell last, so the escape codes
+        # never throw off alignment or get sliced mid-sequence.
+        cells = [_cell(cell, w) for cell, w in zip(r, widths)]
+        if highlight_last and cells:
+            cells[-1] = _green(cells[-1])
+        print("  ".join(cells).rstrip())
     if len(shown) < len(rows):
         print(f"\n{len(shown)} of {len(rows)} shown (--limit 0 shows all)")
-    elif not rows:
+    elif rows:
+        plural = "" if len(rows) == 1 else "s"
+        print(f"\n{len(rows)} result{plural}")
+    else:
         print("(no matches)")
 
 
@@ -541,6 +797,28 @@ def _fit_terminal(widths: list[int]) -> list[int]:
     return widths
 
 
+def _no_match_hint(registry: Any, identity: str) -> str:
+    """No exact match for a show lookup: an identity close enough to be
+    the typo beats echoing the same string back in a follow-up command
+    that's just as certain to fail. A stricter cutoff than the verb/flag
+    typo hint, since the candidate pool here is thousands of identities
+    wide, where a looser one turns up unrelated matches for a made-up
+    string with no counterpart in the catalog at all."""
+    import difflib
+
+    candidates = {f"{m.provider}/{m.id}" for m in registry} | {m.id for m in registry}
+    close = difflib.get_close_matches(identity, candidates, n=1, cutoff=0.6)
+    if close:
+        return (
+            f"{_error_label()} no model matching {identity!r}. "
+            f"Perhaps you meant `rates ai show {close[0]}`?"
+        )
+    return (
+        f"{_error_label()} no model matching {identity!r}. Try rates ai search "
+        "<keyword> for a partial name, or rates ai list to browse."
+    )
+
+
 def _render_show(
     registry: Any,
     identity: str,
@@ -557,11 +835,7 @@ def _render_show(
         matches = list(registry.filter(model=identity))
     if not matches:
         if not missing_ok:
-            print(
-                f"no model matching {identity!r}; try rates ai search "
-                f"{shlex.quote(identity)}",
-                file=sys.stderr,
-            )
+            print(_no_match_hint(registry, identity), file=sys.stderr)
         return 1
 
     if as_json:
@@ -630,14 +904,12 @@ def _kv(label: str, value: Any) -> None:
 def _render_info(registries: dict[str, Any], as_json: bool) -> int:
     from datetime import datetime, timezone
 
-    from rates.ai._load import STALENESS_THRESHOLD_DAYS
-
     today = datetime.now(timezone.utc).date()
     if as_json:
         _print_json(
             [
                 {
-                    "universe": universe,
+                    "domain": domain,
                     "schema_version": reg.schema_version,
                     "snapshot_date": (
                         reg.snapshot_date.isoformat() if reg.snapshot_date else None
@@ -651,21 +923,22 @@ def _render_info(registries: dict[str, Any], as_json: bool) -> int:
                     "coverage_note": _COVERAGE_NOTE,
                     "sources": _source_summary(reg.sources),
                 }
-                for universe, reg in registries.items()
+                for domain, reg in registries.items()
             ]
         )
         return 0
 
-    for universe, reg in registries.items():
-        print(f"universe: {universe}")
+    for domain, reg in registries.items():
+        threshold = DOMAIN_SPECS[domain].staleness_days
+        print(f"domain: {domain}")
         _kv("schema version", reg.schema_version)
         if reg.snapshot_date:
             age = (today - reg.snapshot_date).days
             age_text = f"{age} day{'s' if age != 1 else ''} old"
-            if age > STALENESS_THRESHOLD_DAYS:
+            if threshold is not None and age > threshold:
                 age_text += (
-                    f", past the {STALENESS_THRESHOLD_DAYS}-day threshold; "
-                    "refresh with --sync or --live"
+                    f", past the {threshold}-day threshold; "
+                    "refresh with --fetch stable or --fetch live"
                 )
             _kv("snapshot", f"{reg.snapshot_date} ({age_text})")
         _kv("models", len(reg))
@@ -685,12 +958,14 @@ def _source_summary(sources: Any) -> str | None:
         return None
     reachable = [s for s in sources if s.status == "ok"]
     checked = max((s.fetched_at for s in reachable if s.fetched_at), default=None)
+    # fetched_at is a UTC instant; a daily snapshot reads best as its date.
+    checked_text = checked.date().isoformat() if checked else None
     failed = len(sources) - len(reachable)
     if failed == 0:
-        return f"ok (checked {checked})" if checked else "ok"
+        return f"ok (checked {checked_text})" if checked_text else "ok"
     count = {1: "one", 2: "two", 3: "three", 4: "four"}.get(failed, str(failed))
     plural = "source" if failed == 1 else "sources"
-    prefix = f"checked {checked}; " if checked else ""
+    prefix = f"checked {checked_text}; " if checked_text else ""
     return f"{prefix}{count} {plural} inaccessible"
 
 
@@ -700,18 +975,18 @@ _COVERAGE_NOTE = (
 )
 
 
-def _print_welcome(universe: str | None) -> None:
+def _print_welcome(domain: str | None) -> None:
     from rates import __version__
 
-    if universe is None:
+    if domain is None:
         print(f"Rates pricing registry v{__version__}\n")
-        print("Worlds:")
-        for name, spec in UNIVERSES.items():
+        print("Domains:")
+        for name, spec in DOMAINS.items():
             print(f"  {name}  {spec['tagline']}")
-        examples = UNIVERSES["ai"]["examples"][:3]
+        examples = DOMAINS["ai"]["examples"][:3]
     else:
-        spec = UNIVERSES[universe]
-        print(f"rates {universe}: {spec['tagline']}.")
+        spec = DOMAINS[domain]
+        print(f"rates {domain}: {spec['tagline']}.")
         print(spec["description"])
         examples = spec["examples"]
 
@@ -737,9 +1012,24 @@ def _print_welcome(universe: str | None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    configure_cli_tracing()
+    try:
+        return _main(argv)
+    except BrokenPipeError:
+        # The reader on the other end of a pipe (a pager quit early,
+        # `head`, etc.) closed its end; nothing left to write to, not a
+        # rates failure. Redirect stdout to devnull before returning so
+        # the interpreter's own shutdown-time flush doesn't hit the same
+        # broken pipe and print a second, unrelated-looking traceback.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        return 0
 
+
+def _main(argv: list[str] | None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+
+    # Completion runs on every keystroke and never traces; keep it before
+    # configure_cli_tracing() so it doesn't import or set up traceact.
     if argv and argv[0] == "__complete":
         for candidate in complete(argv[1:]):
             print(candidate)
@@ -747,35 +1037,48 @@ def main(argv: list[str] | None = None) -> int:
     if argv and argv[0] == "completion":
         return _print_completion_script(argv[1:])
 
-    universe: str | None = None
-    if argv and argv[0] in UNIVERSES:
-        universe = argv.pop(0)
+    configure_cli_tracing()
+
+    domain: str | None = None
+    if argv and argv[0] in DOMAINS:
+        domain = argv.pop(0)
 
     if not argv:
         # No verb is a newcomer kicking the tyres, not a mistake: greet,
         # point somewhere useful, succeed.
-        _print_welcome(universe)
+        _print_welcome(domain)
         return 0
 
-    parser = _build_parser(universe)
+    parser = _build_parser(domain)
     args = parser.parse_args(argv)
 
     try:
-        if args.timeout is not None and not (args.sync or args.live):
+        if args.timeout is not None and args.fetch is None:
             raise ValueError(
-                "--timeout has no effect without --sync or --live; the "
-                "default tier reads the bundled ledger and makes no "
-                "network requests"
+                "--timeout has no effect without --fetch stable or "
+                "--fetch live. The default tier reads the bundled ledger "
+                "and makes no network requests."
+            )
+        if args.force and args.fetch != "live":
+            raise ValueError(
+                "--force only applies to --fetch live; the bundled and "
+                "stable tiers don't cache a result for it to bypass."
             )
         with _clean_cli_warnings():
-            return _run(universe, args)
+            return _run(domain, args)
     except (ValueError, TypeError) as exc:
         # The registry raises these for a bad criterion or sort field;
         # both are usage errors here, never tracebacks.
-        print(f"error: {exc}", file=sys.stderr)
+        _print_cli_error(str(exc))
         return 2
+    except LiveFusionError as exc:
+        _print_cli_error(
+            str(exc),
+            hint="Try --fetch stable, or drop --fetch entirely for the bundled ledger.",
+        )
+        return 1
     except RatesError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        _print_cli_error(str(exc))
         return 1
 
 
@@ -800,7 +1103,7 @@ def _clean_cli_warnings() -> Iterator[None]:
         line: str | None = None,
     ) -> None:
         if issubclass(category, RatesWarning):
-            print(f"warning: {message}", file=sys.stderr)
+            print(f"{_warning_label()} {message}", file=sys.stderr)
         else:
             original(message, category, filename, lineno, file, line)
 
@@ -812,9 +1115,9 @@ def _clean_cli_warnings() -> Iterator[None]:
 
 
 @traced("cli.run")
-def _run(universe: str | None, args: argparse.Namespace) -> int:
-    if universe is not None:
-        return _run_query(universe, args)
+def _run(domain: str | None, args: argparse.Namespace) -> int:
+    if domain is not None:
+        return _run_query(domain, args)
     return _run_unscoped(args)
 
 
@@ -832,7 +1135,7 @@ _VALUE_COMPLETERS = {
 }
 
 
-def _candidates(universe: str) -> dict[str, list[str]]:
+def _candidates(domain: str) -> dict[str, list[str]]:
     """Completion candidates from the data itself, kept fast enough for
     TAB: read from the raw bundled ledger (no dataclass construction) and
     cached to a temp file keyed by the bundled file's stat, so a package
@@ -841,10 +1144,14 @@ def _candidates(universe: str) -> dict[str, list[str]]:
     import json
     from importlib import resources
 
-    from rates.ai._load import cache_dir
+    from rates import _cache
 
+    # Navigate to the file from the top-level package, never
+    # resources.files("rates.ai"): that imports the whole AI domain (fusion,
+    # sources, and all) just to stat one file, defeating the completion cache
+    # this key protects. On a cache hit the domain is never imported at all.
     with resources.as_file(
-        resources.files("rates.ai").joinpath("ledger-ai.json.gz")
+        resources.files("rates").joinpath("ai").joinpath("ledger-ai.json.gz")
     ) as bundled:
         stat = bundled.stat()
         key = f"{bundled}:{stat.st_size}:{stat.st_mtime_ns}"
@@ -853,7 +1160,7 @@ def _candidates(universe: str) -> dict[str, list[str]]:
         import hashlib
 
         digest = hashlib.sha256(str(bundled).encode()).hexdigest()[:8]
-    cache = cache_dir() / f"complete-{universe}-{digest}.json"
+    cache = _cache.cache_dir() / f"complete-{domain}-{digest}.json"
 
     try:
         with open(cache) as f:
@@ -905,30 +1212,32 @@ def complete(argv: list[str]) -> list[str]:
     partial = words[-1] if words else ""
     before = words[:-1]
 
-    universe = None
-    if before and before[0] in UNIVERSES:
-        universe = before[0]
+    domain = None
+    if before and before[0] in DOMAINS:
+        domain = before[0]
         before = before[1:]
 
-    if before and before[-1] in _VALUE_COMPLETERS:
-        store = _candidates(universe or "ai")
+    if before and before[-1] == "--fetch":
+        candidates = ["stable", "live"]
+    elif before and before[-1] in _VALUE_COMPLETERS:
+        store = _candidates(domain or "ai")
         candidates = store[_VALUE_COMPLETERS[before[-1]]]
     elif not before:
-        candidates = list(UNIVERSES) + list(VERBS) + ["completion"]
-        if universe:
+        candidates = list(DOMAINS) + list(VERBS) + ["completion"]
+        if domain:
             candidates = list(VERBS)
     elif before[-1] == "show":
         # The id position itself; once it's filled, flags complete below.
-        candidates = _candidates(universe or "ai")["identities"]
+        candidates = _candidates(domain or "ai")["identities"]
     elif before[0] == "show":
         # show renders one record whole, so the query flags don't apply
         # and don't complete; only the tier and output flags do.
-        candidates = ["--json", "--live", "--sync", "--timeout"]
+        candidates = ["--fetch", "--json", "--timeout"]
     elif before == ["completion"]:
         candidates = sorted(_COMPLETION_SCRIPTS)
     else:
-        spec = UNIVERSES[universe or "ai"]
-        candidates = _flag_names(spec, core_only=universe is None)
+        spec = DOMAINS[domain or "ai"]
+        candidates = _flag_names(spec, core_only=domain is None)
 
     lowered = partial.casefold()
     return [c for c in candidates if c.casefold().startswith(lowered)]
@@ -967,20 +1276,29 @@ def _flag_names(spec: dict[str, Any], core_only: bool) -> list[str]:
     if not core_only:
         names += [f"--{name}" for name in spec["bool_flags"]]
     names += ["--limit", "--sort-by", "--ascending", "--descending",
-              "--sync", "--live", "--timeout", "--json", "--no-header"]
+              "--fetch", "--timeout", "--json", "--no-header"]
     return sorted(names)
 
 
 _COMPLETION_SCRIPTS = {
     "bash": "complete -o default -C 'rates __complete' rates\n",
+    # The `#compdef` tag plus the funcstack guard make one script work both
+    # ways: sourced from .zshrc (the `else` registers the completer), or
+    # dropped into an fpath dir as `_rates` and autoloaded (zsh runs the file
+    # as the `_rates` widget, so the `if` calls it to produce completions).
     "zsh": (
+        "#compdef rates\n"
         "_rates() {\n"
         '  local -a candidates\n'
         '  candidates=("${(@f)$(command rates __complete -- '
         '"${(@)words[2,CURRENT]}" 2>/dev/null)}")\n'
         '  (( ${#candidates} )) && compadd -- "${candidates[@]}"\n'
         "}\n"
-        "compdef _rates rates\n"
+        'if [[ "$funcstack[1]" == "_rates" ]]; then\n'
+        '  _rates "$@"\n'
+        "else\n"
+        "  compdef _rates rates\n"
+        "fi\n"
     ),
     "fish": (
         "complete -c rates -f -a "

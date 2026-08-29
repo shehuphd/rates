@@ -1,9 +1,9 @@
-"""Exception and warning types shared across universes.
+"""Exception and warning types shared across domains.
 
 Distinct types for distinct situations, so a caller can catch or filter
-broadly (the base classes) or specifically. ``sync`` never raises any of
-the exceptions here; ``live`` does, since it's the mode that promises a
-result or an explanation of why not.
+broadly (the base classes) or specifically. ``fetch="stable"`` never
+raises any of the exceptions here; ``fetch="live"`` does, since it's the
+mode that promises a result or an explanation of why not.
 """
 
 
@@ -12,7 +12,7 @@ class RatesError(Exception):
 
 
 class LiveFusionError(RatesError):
-    """A live=True call couldn't produce a result."""
+    """A fetch="live" call couldn't produce a result."""
 
 
 class AllSourcesUnreachableError(LiveFusionError):
@@ -30,10 +30,19 @@ class RatesWarning(Warning):
 
 
 class StaleLedgerWarning(RatesWarning):
-    """The bundled ledger is older than this universe's staleness
+    """The bundled ledger is older than this domain's staleness
     threshold. The message names how stale and how to refresh."""
 
 
 class SyncFallbackWarning(RatesWarning):
-    """A sync=True freshness check couldn't complete, and the local ledger
-    is being served instead. The message names why the check failed."""
+    """A fetch="stable" freshness check couldn't complete, and the local
+    ledger is being served instead. The message names why the check
+    failed."""
+
+
+class SourceUnreachableWarning(RatesWarning):
+    """A fetch="live" fusion ran with one or more non-preferred sources
+    unreachable. The preferred source was healthy (its absence raises
+    instead), so a result was produced, but the fields those sources
+    enrich may be absent from it. The message names which sources were
+    skipped."""

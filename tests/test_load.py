@@ -1,5 +1,5 @@
 """Tests for load()'s three tiers: mode validation, staleness warnings,
-the live cache, and sync's fall-back-with-a-warning behavior."""
+the live cache, and stable's fall-back-with-a-warning behavior."""
 
 import json
 import warnings
@@ -7,14 +7,19 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from rates import StaleLedgerWarning, SyncFallbackWarning
+from rates import (
+    SourceUnreachableWarning,
+    StaleLedgerWarning,
+    SyncFallbackWarning,
+)
+from rates import _cache as _cache_module
 from rates._http import FetchError
 from rates.ai import Registry, load
 from rates.ai import _load as load_module
 
 FRESH = {
     "schema_version": "1.0.0",
-    "universe": "ai",
+    "domain": "ai",
     "snapshot_date": datetime.now(timezone.utc).date().isoformat(),
     "sources": [],
     "models": [{"provider": "anthropic", "id": "claude-opus-5"}],
@@ -37,17 +42,17 @@ def bundled(monkeypatch):
 # Mode validation
 
 
-def test_sync_and_live_together_raise():
-    with pytest.raises(ValueError, match="don't combine"):
-        load(sync=True, live=True)
+def test_invalid_fetch_value_raises():
+    with pytest.raises(ValueError, match="bundled.*stable.*live"):
+        load(fetch="nope")  # type: ignore[arg-type]
 
 
 def test_timeout_ceiling_applies_to_load():
     with pytest.raises(ValueError, match="300"):
-        load(live=True, timeout=999)
+        load(fetch="live", timeout=999)
 
 
-# Ledger tier
+# Bundled tier
 
 
 def test_bundled_ledger_loads_without_network(bundled):
@@ -61,7 +66,7 @@ def test_bundled_ledger_loads_without_network(bundled):
 def test_stale_ledger_warns_with_next_steps(bundled):
     old = (datetime.now(timezone.utc).date() - timedelta(days=40)).isoformat()
     bundled["data"] = {**FRESH, "snapshot_date": old}
-    with pytest.warns(StaleLedgerWarning, match="40 days old.*sync=True"):
+    with pytest.warns(StaleLedgerWarning, match="40 days old.*fetch='stable'"):
         load()
 
 
@@ -98,59 +103,146 @@ def fused_live(monkeypatch):
 
 
 def test_live_fetches_and_caches(fused_live):
-    assert len(load(live=True)) == 1
-    assert len(load(live=True)) == 1
+    assert len(load(fetch="live")) == 1
+    assert len(load(fetch="live")) == 1
     assert len(fused_live) == 1  # second call served from the session cache
 
 
 def test_live_cache_expires_after_24_hours_utc(fused_live):
-    load(live=True)
+    load(fetch="live")
     cache_path = load_module._live_cache_path()
     envelope = json.loads(cache_path.read_text())
     envelope["fetched_at"] = (
         datetime.now(timezone.utc) - timedelta(hours=25)
     ).isoformat()
     cache_path.write_text(json.dumps(envelope))
-    load(live=True)
+    load(fetch="live")
     assert len(fused_live) == 2
 
 
 def test_corrupt_live_cache_refetches_instead_of_crashing(fused_live):
     load_module._live_cache_path().write_text("not json{")
-    assert len(load(live=True)) == 1
+    assert len(load(fetch="live")) == 1
     assert len(fused_live) == 1
 
 
 def test_live_timeout_passes_through(fused_live):
-    load(live=True, timeout=120)
+    load(fetch="live", timeout=120)
     assert fused_live == [120]
+
+
+def test_force_bypasses_a_warm_live_cache(fused_live):
+    load(fetch="live")
+    load(fetch="live", force=True)
+    assert len(fused_live) == 2  # the warm cache would otherwise skip this
+
+
+def test_force_result_becomes_the_new_cache(fused_live):
+    load(fetch="live")
+    load(fetch="live", force=True)
+    load(fetch="live")  # not forced: should reuse the just-forced fetch
+    assert len(fused_live) == 2
+
+
+def _live_with_statuses(monkeypatch, statuses):
+    """Wire the live path to fuse successfully while fetch_sources reports
+    the given per-source statuses, so the unreachable-source warning can be
+    exercised without any network."""
+    monkeypatch.setattr(
+        load_module,
+        "fetch_sources",
+        lambda timeout=None: ({"models_dev": {}}, dict(statuses)),
+    )
+    monkeypatch.setattr(
+        load_module, "gather_source_freshness", lambda statuses, timeout=None: {}
+    )
+    monkeypatch.setattr(
+        load_module, "record_freshness_lookup", lambda timeout=None: None
+    )
+    monkeypatch.setattr(
+        load_module, "fuse", lambda payloads, statuses, **kwargs: dict(FRESH)
+    )
+
+
+def test_live_warns_when_a_fallback_source_is_unreachable(isolated_cache, monkeypatch):
+    _live_with_statuses(
+        monkeypatch,
+        {"models_dev": "ok", "genai_prices": "ok", "litellm": "ok",
+         "openrouter": "unreachable"},
+    )
+    with pytest.warns(SourceUnreachableWarning, match="openrouter"):
+        load(fetch="live")
+
+
+def test_live_names_every_unreachable_fallback(isolated_cache, monkeypatch):
+    _live_with_statuses(
+        monkeypatch,
+        {"models_dev": "ok", "genai_prices": "unreachable", "litellm": "ok",
+         "openrouter": "unreachable"},
+    )
+    with pytest.warns(SourceUnreachableWarning, match="genai_prices, openrouter"):
+        load(fetch="live")
+
+
+def test_live_does_not_warn_when_every_source_is_reachable(
+    isolated_cache, monkeypatch
+):
+    _live_with_statuses(
+        monkeypatch,
+        {"models_dev": "ok", "genai_prices": "ok", "litellm": "ok",
+         "openrouter": "ok"},
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SourceUnreachableWarning)
+        load(fetch="live")  # a fully-healthy fusion stays quiet
+
+
+def test_a_warm_cache_does_not_re_warn(isolated_cache, monkeypatch):
+    # The warning describes a fusion that actually ran degraded; a cached
+    # result skips fetch_sources entirely, so the second read is silent.
+    _live_with_statuses(
+        monkeypatch,
+        {"models_dev": "ok", "openrouter": "unreachable"},
+    )
+    with pytest.warns(SourceUnreachableWarning):
+        load(fetch="live")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", SourceUnreachableWarning)
+        load(fetch="live")  # served from cache, no fresh fusion, no warning
+
+
+def test_force_without_live_raises():
+    with pytest.raises(ValueError, match="only applies to fetch='live'"):
+        load(fetch="stable", force=True)
+    with pytest.raises(ValueError, match="only applies to fetch='live'"):
+        load(force=True)
 
 
 # The cache directory
 
 # Captured at import time, before the autouse isolation fixture replaces
 # the module attribute; this is the shipped function, not the test double.
-_REAL_CACHE_DIR = load_module.cache_dir
+_REAL_CACHE_DIR = _cache_module.cache_dir
 
 
 def test_cache_dir_is_per_user_and_private(tmp_path, monkeypatch):
-    monkeypatch.setattr(load_module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(_cache_module.Path, "home", lambda: tmp_path)
     cache = _REAL_CACHE_DIR()
     assert cache == tmp_path / ".cache" / "rates"
     assert cache.stat().st_mode & 0o777 == 0o700
 
 
 def test_live_cache_written_by_an_incompatible_rates_version_refetches(fused_live):
-    load(live=True)
+    load(fetch="live")
     cache_path = load_module._live_cache_path()
     envelope = json.loads(cache_path.read_text())
     envelope["registry"]["schema_version"] = "9.0.0"
     cache_path.write_text(json.dumps(envelope))
-    load(live=True)
+    load(fetch="live")
     assert len(fused_live) == 2
 
 
-# Sync tier
+# Stable tier
 
 
 def _release(published, asset_url="https://example.test/ledger-ai.json"):
@@ -171,18 +263,18 @@ def _patch_sync_fetch(monkeypatch, releases, ledger=None):
     monkeypatch.setattr(load_module, "fetch_json", fake)
 
 
-def test_sync_serves_a_newer_published_ledger(bundled, monkeypatch):
+def test_stable_serves_a_newer_published_ledger(bundled, monkeypatch):
     old = (datetime.now(timezone.utc).date() - timedelta(days=10)).isoformat()
     bundled["data"] = {**FRESH, "snapshot_date": old}
     newer = {**FRESH, "models": [{"provider": "x", "id": "a"}, {"provider": "x", "id": "b"}]}
     _patch_sync_fetch(
         monkeypatch, [_release(FRESH["snapshot_date"])], ledger=newer
     )
-    registry = load(sync=True)
+    registry = load(fetch="stable")
     assert len(registry) == 2
 
 
-def test_sync_skips_the_download_when_local_is_current(bundled, monkeypatch):
+def test_stable_skips_the_download_when_local_is_current(bundled, monkeypatch):
     downloads = []
 
     def fake(url, timeout=None, token=None):
@@ -194,27 +286,27 @@ def test_sync_skips_the_download_when_local_is_current(bundled, monkeypatch):
     monkeypatch.setattr(load_module, "fetch_json", fake)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        registry = load(sync=True)
+        registry = load(fetch="stable")
     assert len(registry) == 1
     assert downloads == []
 
 
-def test_sync_failure_warns_and_falls_back_never_raises(bundled, monkeypatch):
+def test_stable_failure_warns_and_falls_back_never_raises(bundled, monkeypatch):
     _patch_sync_fetch(monkeypatch, FetchError("https://api.github.com/x: HTTP 403"))
     with pytest.warns(SyncFallbackWarning, match="couldn't check"):
-        registry = load(sync=True)
+        registry = load(fetch="stable")
     assert len(registry) == 1
 
 
-def test_sync_with_no_ledger_release_serves_local_quietly(bundled, monkeypatch):
+def test_stable_with_no_ledger_release_serves_local_quietly(bundled, monkeypatch):
     _patch_sync_fetch(monkeypatch, [{"published_at": "2030-01-01T00:00:00Z", "assets": []}])
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        registry = load(sync=True)
+        registry = load(fetch="stable")
     assert len(registry) == 1
 
 
-def test_sync_caches_the_download_and_reuses_it(bundled, monkeypatch):
+def test_stable_caches_the_download_and_reuses_it(bundled, monkeypatch):
     old = (datetime.now(timezone.utc).date() - timedelta(days=10)).isoformat()
     bundled["data"] = {**FRESH, "snapshot_date": old}
     newer = {
@@ -230,12 +322,12 @@ def test_sync_caches_the_download_and_reuses_it(bundled, monkeypatch):
         return dict(newer)
 
     monkeypatch.setattr(load_module, "fetch_json", fake)
-    assert len(load(sync=True)) == 2
-    assert len(load(sync=True)) == 2  # served from the sync cache this time
+    assert len(load(fetch="stable")) == 2
+    assert len(load(fetch="stable")) == 2  # served from the sync cache this time
     assert len(downloads) == 1
 
 
-def test_sync_compares_snapshots_via_the_release_tag(bundled, monkeypatch):
+def test_stable_compares_snapshots_via_the_release_tag(bundled, monkeypatch):
     # Built one day, released the next: the tag carries the snapshot date,
     # so the ledger must not look newer than its own content.
     tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
@@ -261,31 +353,31 @@ def test_sync_compares_snapshots_via_the_release_tag(bundled, monkeypatch):
     monkeypatch.setattr(load_module, "fetch_json", fake)
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        registry = load(sync=True)
+        registry = load(fetch="stable")
     assert len(registry) == 1
     assert downloads == []
 
 
-def test_sync_fallback_still_reports_a_stale_local_ledger(bundled, monkeypatch):
+def test_stable_fallback_still_reports_a_stale_local_ledger(bundled, monkeypatch):
     old = (datetime.now(timezone.utc).date() - timedelta(days=40)).isoformat()
     bundled["data"] = {**FRESH, "snapshot_date": old}
     _patch_sync_fetch(monkeypatch, FetchError("https://api.github.com/x: HTTP 403"))
     with pytest.warns() as record:
-        load(sync=True)
+        load(fetch="stable")
     categories = {w.category for w in record}
     assert SyncFallbackWarning in categories
     assert StaleLedgerWarning in categories
 
 
-def test_sync_with_no_newer_release_still_reports_staleness(bundled, monkeypatch):
+def test_stable_with_no_newer_release_still_reports_staleness(bundled, monkeypatch):
     old = (datetime.now(timezone.utc).date() - timedelta(days=40)).isoformat()
     bundled["data"] = {**FRESH, "snapshot_date": old}
     _patch_sync_fetch(monkeypatch, [_release(old)])
     with pytest.warns(StaleLedgerWarning):
-        load(sync=True)
+        load(fetch="stable")
 
 
-def test_sync_schema_major_mismatch_warns_and_falls_back(bundled, monkeypatch):
+def test_stable_schema_major_mismatch_warns_and_falls_back(bundled, monkeypatch):
     old = (datetime.now(timezone.utc).date() - timedelta(days=10)).isoformat()
     bundled["data"] = {**FRESH, "snapshot_date": old}
     incompatible = {**FRESH, "schema_version": "2.0.0"}
@@ -293,8 +385,25 @@ def test_sync_schema_major_mismatch_warns_and_falls_back(bundled, monkeypatch):
         monkeypatch, [_release(FRESH["snapshot_date"])], ledger=incompatible
     )
     with pytest.warns(SyncFallbackWarning, match="pip install -U rates"):
-        registry = load(sync=True)
+        registry = load(fetch="stable")
     assert len(registry) == 1
+
+
+# Bundled and stable share one "best local snapshot"
+
+
+def test_bundled_tier_stops_warning_after_a_successful_stable_fetch(bundled, monkeypatch):
+    old = (datetime.now(timezone.utc).date() - timedelta(days=40)).isoformat()
+    bundled["data"] = {**FRESH, "snapshot_date": old}
+    _patch_sync_fetch(monkeypatch, [_release(FRESH["snapshot_date"])], ledger=dict(FRESH))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        load(fetch="stable")  # downloads and caches today's snapshot
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        registry = load()  # bare/default tier now sees it, not the stale bundled asset
+    assert registry.snapshot_date.isoformat() == FRESH["snapshot_date"]
 
 
 # The shipped ledger itself
@@ -304,3 +413,14 @@ def test_the_actual_bundled_ledger_is_loadable_and_queryable():
     registry = load()
     assert len(registry) > 5000
     assert len(registry.filter(provider="anthropic", model="claude-opus-5")) == 1
+
+
+def test_bundled_source_fetched_at_reads_as_a_utc_instant():
+    # The bundled ledger predates the instant change and carries day-only
+    # fetched_at strings; they must load as timezone-aware UTC instants, not
+    # naive datetimes or bare dates.
+    registry = load()
+    stamped = [s.fetched_at for s in registry.sources if s.fetched_at]
+    assert stamped, "expected at least one reachable source with a timestamp"
+    for fetched_at in stamped:
+        assert fetched_at.tzinfo == timezone.utc

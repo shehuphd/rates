@@ -1,4 +1,4 @@
-"""Dataclasses for the AI universe's model records.
+"""Dataclasses for the AI domain's model records.
 
 The field-by-field schema, source attribution, and worked examples live in
 ERD.md. These classes mirror that JSON shape; they don't validate against
@@ -9,15 +9,18 @@ produced.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
 
 def _parse_date(value: str | None) -> date | None:
     """Parse an ISO date string, passing None through.
 
-    Upstream sources sometimes carry partial dates ("2025-04", "2025");
-    those are floored to the first day of the period so they stay
+    For an announced calendar fact (a release or deprecation date): a
+    provider named a day, not an instant, so this is the right type for
+    those. Provenance and observation timestamps use ``_parse_instant``
+    instead. Upstream sources sometimes carry partial dates ("2025-04",
+    "2025"); those are floored to the first day of the period so they stay
     comparable and sortable alongside full dates.
     """
     if value is None:
@@ -28,6 +31,32 @@ def _parse_date(value: str | None) -> date | None:
     if len(parts) == 1:
         return date(int(parts[0]), 1, 1)
     return date.fromisoformat(value)
+
+
+def _parse_instant(value: str | None) -> datetime | None:
+    """Parse a provenance or observation timestamp to a UTC instant.
+
+    For an event (a source fetched, a price observed upstream), where a
+    fast-moving domain needs sub-second resolution a calendar date can't
+    carry. Passes None through. Accepts a full ISO instant (with a "Z" or
+    an offset, normalized to UTC), a naive ISO instant (assumed UTC), or a
+    date-only string (floored to midnight UTC), so a day-granular snapshot
+    still reads as an instant. Every result is timezone-aware UTC, never a
+    naive datetime whose meaning would depend on the reader's clock.
+    """
+    if value is None:
+        return None
+    if "T" not in value and ":" not in value:
+        # A date-only (or partial) string: reuse the date flooring, then
+        # anchor it at midnight UTC.
+        floored = _parse_date(value)
+        if floored is None:
+            return None
+        return datetime(floored.year, floored.month, floored.day, tzinfo=timezone.utc)
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)
@@ -223,6 +252,13 @@ class Model:
     reasoning: Reasoning | None = None
     lifecycle: Lifecycle = field(default_factory=lambda: Lifecycle(status=None))
     sources: dict[str, str] = field(default_factory=dict)
+    observed_at: datetime | None = None
+    # When this record's underlying value was observed upstream, as a UTC
+    # instant. None for the AI domain: model list prices are announced, not
+    # continuously observed, and no source dates a price to the second. It
+    # exists on the record now so a fast-moving domain (a market price) fills
+    # a stricter value into a field that already exists, rather than a later
+    # domain forcing a breaking schema change to add it.
 
     def to_dict(self) -> dict[str, Any]:
         """The record in ERD.md's JSON shape, the inverse of from_dict:
@@ -302,6 +338,8 @@ class Model:
             ),
         }
         record["sources"] = dict(self.sources)
+        if self.observed_at is not None:
+            record["observed_at"] = self.observed_at.isoformat()
         return record
 
     def price_for(self, **conditions: int) -> Price:
@@ -358,4 +396,5 @@ class Model:
                 else Lifecycle(status=None)
             ),
             sources=dict(data.get("sources", {})),
+            observed_at=_parse_instant(data.get("observed_at")),
         )

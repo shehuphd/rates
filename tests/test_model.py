@@ -1,4 +1,4 @@
-"""Tests for the AI universe's model dataclasses, built from the worked
+"""Tests for the AI domain's model dataclasses, built from the worked
 examples in ERD.md verbatim."""
 
 from datetime import date

@@ -5,12 +5,18 @@ structures, then the remaining happy paths."""
 import subprocess
 import sys
 import urllib.request
+from datetime import timezone
+from pathlib import Path
 
 import pytest
 
 from rates import _cli
 from rates.ai import Model, Price, PriceTier, Reasoning, Registry
-from rates.ai._model import _parse_date
+from rates.ai._model import _parse_date, _parse_instant
+
+# The repo root, resolved from this file's location, never hardcoded: an
+# absolute path would break on CI and every machine that isn't its author's.
+_ROOT = Path(__file__).resolve().parent.parent
 
 # Parsing: malformed and partial input
 
@@ -27,6 +33,55 @@ def test_impossible_month_raises():
 
 def test_year_only_date_floors_to_january_first():
     assert _parse_date("2025").isoformat() == "2025-01-01"
+
+
+# Provenance/observation instants: UTC-anchored, never a naive datetime
+
+
+def test_instant_passes_none_through():
+    assert _parse_instant(None) is None
+
+
+def test_date_only_instant_floors_to_midnight_utc():
+    # An older ledger's day-granular fetched_at must still read as an instant.
+    dt = _parse_instant("2026-08-24")
+    assert dt.isoformat() == "2026-08-24T00:00:00+00:00"
+
+
+def test_zulu_instant_parses_on_python_310():
+    # datetime.fromisoformat rejects a trailing "Z" before 3.11; the parser
+    # normalizes it so a real sub-second stamp round-trips on 3.10.
+    dt = _parse_instant("2026-08-24T14:03:11.204Z")
+    assert dt.tzinfo == timezone.utc
+    assert dt.hour == 14 and dt.microsecond == 204000
+
+
+def test_offset_instant_is_normalized_to_utc():
+    dt = _parse_instant("2026-08-24T09:03:11-05:00")
+    assert dt.isoformat() == "2026-08-24T14:03:11+00:00"
+
+
+def test_naive_instant_is_assumed_utc_not_left_ambiguous():
+    dt = _parse_instant("2026-08-24T14:03:11")
+    assert dt.tzinfo == timezone.utc
+
+
+def test_observed_at_round_trips_through_the_record():
+    record = {
+        "provider": "acme", "id": "x", "price": {"currency": "USD", "unit": 1},
+        "observed_at": "2026-08-24T14:03:11.204Z",
+    }
+    model = Model.from_dict(record)
+    assert model.observed_at == _parse_instant("2026-08-24T14:03:11.204Z")
+    assert model.to_dict()["observed_at"] == model.observed_at.isoformat()
+
+
+def test_absent_observed_at_is_none_and_omitted_from_output():
+    model = Model.from_dict(
+        {"provider": "acme", "id": "x", "price": {"currency": "USD", "unit": 1}}
+    )
+    assert model.observed_at is None
+    assert "observed_at" not in model.to_dict()
 
 
 def test_single_element_range_reads_as_absent_not_a_crash():
@@ -115,9 +170,11 @@ def test_filter_criteria_accept_non_string_values_by_coercion():
     assert len(REG.filter(model=123)) == 0  # coerced, compared, no crash
 
 
-def test_sort_on_a_field_every_record_lacks_keeps_all_records():
-    result = REG.sort_by("price.reasoning_mtok", descending=False)
-    assert len(result) == len(REG)
+def test_sort_by_a_unit_no_record_carries_is_an_error_not_a_silent_no_op():
+    # A unit no model in this registry bills on would otherwise sort
+    # every record into "missing" with no signal that anything was off.
+    with pytest.raises(TypeError, match="'reasoning_mtok' isn't a price unit"):
+        REG.sort_by("price.reasoning_mtok", descending=False)
 
 
 def test_filter_then_price_units_reflects_the_narrowed_set():
@@ -293,7 +350,7 @@ def run(capsys, *argv):
 def cli_fixture(monkeypatch):
     monkeypatch.setattr(
         _cli, "_loader",
-        lambda universe: lambda sync=False, live=False, timeout=None: REG,
+        lambda domain: lambda fetch="bundled", timeout=None, force=False: REG,
     )
 
 
@@ -308,7 +365,7 @@ def test_bare_rates_greets_instead_of_erroring(capsys):
     assert "--help" in out
 
 
-def test_bare_universe_introduces_it_with_examples(capsys):
+def test_bare_domain_introduces_it_with_examples(capsys):
     assert _cli.main(["ai"]) == 0
     out = capsys.readouterr().out
     assert "capabilities, and lifecycle" in out
@@ -322,11 +379,11 @@ def test_cli_timeout_past_the_ceiling_is_a_clean_error(capsys):
     with pytest.MonkeyPatch.context() as mp:
         mp.setattr(
             _cli, "_loader",
-            lambda universe: lambda sync=False, live=False, timeout=None: real_load(
-                sync=sync, live=live, timeout=timeout
+            lambda domain: lambda fetch="bundled", timeout=None, force=False: real_load(
+                fetch=fetch, timeout=timeout, force=force
             ),
         )
-        code = _cli.main(["ai", "list", "--live", "--timeout", "9999"])
+        code = _cli.main(["ai", "list", "--fetch", "live", "--timeout", "9999"])
     err = capsys.readouterr().err
     assert code == 2
     assert "300" in err and "Traceback" not in err
@@ -341,27 +398,44 @@ def test_empty_search_phrase_matches_everything(capsys, cli_fixture):
 def test_info_passes_the_tier_flags_through(capsys, monkeypatch):
     received = []
 
-    def loader(universe):
-        def load(sync=False, live=False, timeout=None):
-            received.append((sync, live, timeout))
+    def loader(domain):
+        def load(fetch="bundled", timeout=None, force=False):
+            received.append((fetch, timeout))
             return REG
 
         return load
 
     monkeypatch.setattr(_cli, "_loader", loader)
-    code, _, _ = run(capsys, "ai", "info", "--live", "--timeout", "120")
+    code, _, _ = run(capsys, "ai", "info", "--fetch", "live", "--timeout", "120")
     assert code == 0
-    assert received == [(False, True, 120.0)]
+    assert received == [("live", 120.0)]
 
 
 def test_python_dash_m_rates_runs_the_same_cli():
     result = subprocess.run(
         [sys.executable, "-m", "rates", "--version"],
         capture_output=True, text=True, check=False,
-        cwd="/Users/mo/Dropbox/Dev/rates",
+        cwd=str(_ROOT),
     )
     assert result.returncode == 0
     assert "rates" in result.stdout
+
+
+def test_reader_closing_early_exits_clean_not_a_traceback():
+    # A pager quit early (or `| head`) closes its end of the pipe while
+    # rates is still writing rows; that used to surface as an unhandled
+    # BrokenPipeError instead of a quiet exit.
+    with subprocess.Popen(
+        [sys.executable, "-m", "rates", "ai", "list", "--limit", "0"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        cwd=str(_ROOT),
+    ) as proc:
+        proc.stdout.readline()
+        proc.stdout.close()
+        _, err = proc.communicate(timeout=10)
+    assert proc.returncode == 0
+    assert "Traceback" not in err
+    assert "BrokenPipeError" not in err
 
 
 # Completion protocol edges
@@ -474,7 +548,7 @@ def test_build_ledger_writes_both_artifacts(tmp_path, monkeypatch, capsys):
     import json
 
     spec = importlib.util.spec_from_file_location(
-        "build_ledger", "/Users/mo/Dropbox/Dev/rates/scripts/build_ledger.py"
+        "build_ledger", str(_ROOT / "scripts" / "build_ledger.py")
     )
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
