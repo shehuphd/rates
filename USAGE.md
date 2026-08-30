@@ -139,7 +139,7 @@ For interactive paging through a large `--limit 0` result, pipe into a pager: `r
 rates ai filter --model-contains opus --json | jq '.[].price.input_mtok'
 ```
 
-`--json` emits records in the same JSON shape the published ledger files use, so there's one format everywhere. `--no-header` drops the table header for `awk`/`cut` pipelines. Tables truncate to the terminal width only on a live terminal; piped output is never truncated. Notices go to stderr, so stdout stays clean for pipes.
+`--json` emits records in the same JSON shape the published ledger files use, so there's one format everywhere. `--no-header` prints rows only, no table header and no result-count footer, for `awk`/`cut` pipelines. Tables truncate to the terminal width only on a live terminal; piped output is never truncated. Notices go to stderr, so stdout stays clean for pipes.
 
 Exit codes: `0` success (including the welcome screens), `1` the work failed (no such model, sources unreachable), `2` the command was malformed (unknown flag, missing unit or direction).
 

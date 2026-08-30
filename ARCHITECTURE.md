@@ -212,7 +212,7 @@ Anthropic models with opus in the name, at most $5 per million input tokens, fir
 
 ### Machine output and registry introspection
 
-`--json` on any query emits records in the ledger's own JSON shape, the same format the published releases and ERD.md use, so the CLI, the Python API, and the data files speak one format and `rates ai filter ... --json | jq` needs no translation layer. `--no-header` strips the table header for `awk`/`cut` pipelines; tables truncate to the terminal width only when stdout is a terminal, piped output is never touched. `rates [domain] info` reports the registry itself: snapshot date and age against the staleness threshold, model and provider counts, and a one-line summary of whether the sources could all be reached.
+`--json` on any query emits records in the ledger's own JSON shape, the same format the published releases and ERD.md use, so the CLI, the Python API, and the data files speak one format and `rates ai filter ... --json | jq` needs no translation layer. `--no-header` prints rows only (no header, no result-count footer) for `awk`/`cut` pipelines; tables truncate to the terminal width only when stdout is a terminal, piped output is never touched. `rates [domain] info` reports the registry itself: snapshot date and age against the staleness threshold, model and provider counts, and a one-line summary of whether the sources could all be reached.
 
 ### Tab completion and tracing
 

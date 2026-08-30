@@ -425,7 +425,7 @@ def _add_common_flags(parser: argparse.ArgumentParser, query: bool = True) -> No
         direction.add_argument("--ascending", action="store_true")
         direction.add_argument("--descending", action="store_true")
         parser.add_argument("--no-header", action="store_true",
-                            help="omit the header row (for awk/cut pipelines)")
+                            help="rows only, no header or footer (for awk/cut pipelines)")
     parser.add_argument("--json", action="store_true",
                         help="emit records as JSON in the ledger's own shape")
     parser.add_argument(
@@ -765,6 +765,9 @@ def _render_table(
         if highlight_last and cells:
             cells[-1] = _green(cells[-1])
         print("  ".join(cells).rstrip())
+    if no_header:
+        return  # rows only: the flag exists for awk/cut pipelines, and a
+        # footer (or a "(no matches)" placeholder) would pollute them
     if len(shown) < len(rows):
         print(f"\n{len(shown)} of {len(rows)} shown (--limit 0 shows all)")
     elif rows:

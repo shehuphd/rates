@@ -720,6 +720,17 @@ def test_no_header_omits_the_header_row(capsys):
     assert "PROVIDER" not in out and "claude-opus-5" in out
 
 
+def test_no_header_omits_the_footer_too(capsys):
+    # The flag exists for awk/cut pipelines: rows only, nothing else on
+    # stdout, truncated or not, matching or not.
+    _, out, _ = run(capsys, "ai", "list", "--no-header", "--limit", "2")
+    assert "shown" not in out and out == out.rstrip("\n") + "\n"
+    _, out, _ = run(capsys, "ai", "list", "--no-header", "--limit", "0")
+    assert "result" not in out
+    _, out, _ = run(capsys, "ai", "filter", "--no-header", "--provider", "nobody")
+    assert out == ""
+
+
 def test_version_flag(capsys):
     from rates import __version__
 
