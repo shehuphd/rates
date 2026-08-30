@@ -207,6 +207,41 @@ class Lifecycle:
 
 
 @dataclass(frozen=True)
+class Alias:
+    """A rolling-alias fact about this model's own ``id``, from KeyCall's
+    per-provider naming-convention catalog. Present only when the id
+    matches an established, evidence-backed convention for that provider
+    (e.g. a ``-latest`` suffix); absent for a dated/pinned id, and absent
+    (never guessed) for a provider with no recorded convention.
+
+    ``maintained`` is about callability, not pricing, and is tri-state:
+    ``True`` means the provider keeps the alias aimed at a live model
+    (Gemini-style), ``False`` means the alias family has been observed
+    going stale or dead (OpenAI's ``-chat-latest`` family, 2026-08-10),
+    ``None`` means the convention is recorded but liveness hasn't been
+    checked. Pricing here always keys on the dated snapshot regardless of
+    ``maintained``: this field exists so a caller reading ``rates`` for
+    cost doesn't misread it as a callability guarantee.
+    """
+
+    convention: str
+    maintained: bool | None
+    verified: date
+    note: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> Alias:
+        verified = _parse_date(data["verified"])
+        assert verified is not None, "verified is a required, non-null field"
+        return cls(
+            convention=data["convention"],
+            maintained=data.get("maintained"),
+            verified=verified,
+            note=data["note"],
+        )
+
+
+@dataclass(frozen=True)
 class Modalities:
     """Content formats crossing the wire, split by direction."""
 
@@ -253,6 +288,12 @@ class Model:
     lifecycle: Lifecycle = field(default_factory=lambda: Lifecycle(status=None))
     sources: dict[str, str] = field(default_factory=dict)
     observed_at: datetime | None = None
+    alias: Alias | None = None
+    # Baked in at ledger-build time from KeyCall's per-provider alias
+    # convention catalog, never computed at runtime: rates stays
+    # zero-dependency for every caller who isn't building the ledger
+    # itself. None for a dated/pinned id, or a provider KeyCall doesn't
+    # have convention evidence for.
     # When this record's underlying value was observed upstream, as a UTC
     # instant. None for the AI domain: model list prices are announced, not
     # continuously observed, and no source dates a price to the second. It
@@ -340,6 +381,13 @@ class Model:
         record["sources"] = dict(self.sources)
         if self.observed_at is not None:
             record["observed_at"] = self.observed_at.isoformat()
+        if self.alias is not None:
+            record["alias"] = {
+                "convention": self.alias.convention,
+                "maintained": self.alias.maintained,
+                "verified": self.alias.verified.isoformat(),
+                "note": self.alias.note,
+            }
         return record
 
     def price_for(self, **conditions: int) -> Price:
@@ -397,4 +445,7 @@ class Model:
             ),
             sources=dict(data.get("sources", {})),
             observed_at=_parse_instant(data.get("observed_at")),
+            alias=(
+                Alias.from_dict(data["alias"]) if data.get("alias") is not None else None
+            ),
         )

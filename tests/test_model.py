@@ -146,3 +146,77 @@ def test_to_dict_round_trips_through_from_dict():
     for record in (OPUS_5, DEEPSEEK):
         m = Model.from_dict(record)
         assert Model.from_dict(m.to_dict()) == m
+
+
+# Alias: baked in at ledger-build time from KeyCall's convention catalog,
+# never computed at runtime. See scripts/build_ledger.py and ERD.md § ALIAS.
+
+
+def test_dated_id_has_no_alias_by_default():
+    # claude-opus-5 is a pinned snapshot, not a rolling reference; the
+    # worked example carries no "alias" key at all.
+    m = Model.from_dict(OPUS_5)
+    assert m.alias is None
+    assert "alias" not in m.to_dict()
+
+
+def test_alias_fact_parses_every_field():
+    record = {
+        **OPUS_5,
+        "alias": {
+            "convention": "-latest suffix",
+            "maintained": True,
+            "verified": "2026-08-10",
+            "note": "Gemini keeps this aimed at a live model.",
+        },
+    }
+    m = Model.from_dict(record)
+    assert m.alias is not None
+    assert m.alias.convention == "-latest suffix"
+    assert m.alias.maintained is True
+    assert m.alias.verified == date(2026, 8, 10)
+    assert m.alias.note == "Gemini keeps this aimed at a live model."
+
+
+def test_alias_maintained_is_tristate_not_defaulted_to_false():
+    # A convention can be recorded with liveness unverified: None, never a
+    # guessed False (same tri-state rule as tool_call/structured_output).
+    record = {
+        **OPUS_5,
+        "alias": {
+            "convention": "-preview suffix",
+            "verified": "2026-08-10",
+            "note": "Convention recorded; liveness not yet checked.",
+        },
+    }
+    assert Model.from_dict(record).alias.maintained is None
+
+
+def test_alias_stale_family_reports_maintained_false_not_omitted():
+    # OpenAI's -chat-latest family went stale/dead on 2026-08-10; that's a
+    # fact to carry, not a reason to hide the alias entry.
+    record = {
+        **OPUS_5,
+        "alias": {
+            "convention": "-chat-latest suffix",
+            "maintained": False,
+            "verified": "2026-08-10",
+            "note": "Observed dead; dated models stayed healthy.",
+        },
+    }
+    assert Model.from_dict(record).alias.maintained is False
+
+
+def test_alias_round_trips_through_to_dict():
+    record = {
+        **OPUS_5,
+        "alias": {
+            "convention": "-latest suffix",
+            "maintained": True,
+            "verified": "2026-08-10",
+            "note": "Gemini keeps this aimed at a live model.",
+        },
+    }
+    m = Model.from_dict(record)
+    assert Model.from_dict(m.to_dict()) == m
+    assert m.to_dict()["alias"] == record["alias"]

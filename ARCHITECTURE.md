@@ -142,6 +142,12 @@ class PreferredSourceUnavailableError(LiveFusionError): ...  # models.dev specif
 - Sorting is a separate chained call, `Registry.filter(...).sort_by(field, descending=...)`, never a `filter()` parameter. They're different jobs (narrowing vs. ordering), and a caller may want to sort without filtering at all. `descending` is always stated explicitly, no field defaults to a "good" direction, that would be another opinion smuggled into the interface.
 - Model records are stdlib `dataclasses`, not Pydantic. Pydantic would land as a mandatory dependency on the default `ledger` install path, not just `live`, breaking the zero-dependency, air-gapped-safe promise for the common case.
 
+### Alias facts: a build-time dependency that never reaches an installed package
+
+A model's own `id` is sometimes a rolling reference (`gemini-pro-latest`) rather than a dated snapshot, and what that implies for callability differs by provider: Gemini and DeepSeek keep such aliases aimed at a live model and date nothing, while OpenAI's `-chat-latest` family was observed going stale wholesale on 2026-08-10. Classifying this correctly needs per-provider convention evidence with dated drift probes, knowledge [KeyCall](https://pypi.org/project/keycall) already owns; duplicating it inside `rates` would be a second, unverified copy of the same classifier.
+
+Rather than add KeyCall as a runtime dependency, `scripts/build_ledger.py` (a maintainer/CI script, not part of the installed package) calls KeyCall's keyless `alias_fact(provider, model_id)` once per model while building the ledger, and bakes the result into the record as `alias` (see ERD.md § ALIAS). The fact stays with the record from then on: a plain `pip install rates` never imports KeyCall, and `fetch="live"`'s in-process fusion (which never touches the ledger-build pipeline) simply carries no `alias` field, same as any other build-time-only enrichment. Staleness of the baked fact is KeyCall's problem, not `rates`': its own drift probes failing in its release gate are what trigger a refresh, and the next scheduled ledger build picks up the new classification.
+
 ## CLI shape
 
 One primitive, `filter`, with three presets over it. Domain scoping is positional. Matching is exact by default, broadened only by explicit spelling. Flags mirror the Python API one-to-one, so the CLI and the code share a single vocabulary.

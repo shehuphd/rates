@@ -578,3 +578,104 @@ def test_build_ledger_writes_both_artifacts(tmp_path, monkeypatch, capsys):
         )
     )
     assert plain == packed
+
+
+def _load_build_ledger():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "build_ledger", str(_ROOT / "scripts" / "build_ledger.py")
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _FakeAliasFact:
+    def __init__(self, convention, maintained, verified, note):
+        self.convention = convention
+        self.maintained = maintained
+        self.verified = verified
+        self.note = note
+
+
+def test_resolve_alias_returns_fact_dict_on_match(monkeypatch):
+    module = _load_build_ledger()
+    fact = _FakeAliasFact("-latest suffix", True, "2026-08-10", "Gemini keeps this live.")
+    monkeypatch.setattr(module.keycall, "alias_fact", lambda provider, model_id: fact, raising=False)
+    assert module._resolve_alias("google", "gemini-pro-latest") == {
+        "convention": "-latest suffix",
+        "maintained": True,
+        "verified": "2026-08-10",
+        "note": "Gemini keeps this live.",
+    }
+
+
+def test_resolve_alias_returns_none_when_no_convention_matches(monkeypatch):
+    module = _load_build_ledger()
+    monkeypatch.setattr(module.keycall, "alias_fact", lambda provider, model_id: None, raising=False)
+    assert module._resolve_alias("anthropic", "claude-opus-5") is None
+
+
+def test_resolve_alias_returns_none_for_unsupported_provider(monkeypatch):
+    module = _load_build_ledger()
+
+    def raise_unsupported(provider, model_id):
+        raise module.keycall.KeyCallError(
+            "no catalog entry for this provider",
+            code=module.keycall.ErrorCode.UNSUPPORTED_PROVIDER,
+        )
+
+    monkeypatch.setattr(module.keycall, "alias_fact", raise_unsupported, raising=False)
+    assert module._resolve_alias("some-niche-provider", "whatever-v1") is None
+
+
+def test_resolve_alias_propagates_other_keycall_errors(monkeypatch):
+    module = _load_build_ledger()
+
+    def raise_stale_catalog(provider, model_id):
+        raise module.keycall.KeyCallError(
+            "bundled catalog is out of date",
+            code=module.keycall.ErrorCode.CATALOG_UPDATE_REQUIRED,
+        )
+
+    monkeypatch.setattr(module.keycall, "alias_fact", raise_stale_catalog, raising=False)
+    with pytest.raises(module.keycall.KeyCallError):
+        module._resolve_alias("openai", "gpt-5.6-chat-latest")
+
+
+def test_build_ledger_bakes_alias_facts_into_models(tmp_path, monkeypatch):
+    import json
+
+    module = _load_build_ledger()
+    (tmp_path / "src" / "rates" / "ai").mkdir(parents=True)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    monkeypatch.setattr(module, "fetch_sources", lambda: ({}, {"models_dev": "ok"}))
+    monkeypatch.setattr(module, "gather_source_freshness", lambda statuses, timeout=None: {})
+    monkeypatch.setattr(module, "record_freshness_lookup", lambda timeout=None: None)
+    monkeypatch.setattr(
+        module, "fuse",
+        lambda payloads, statuses, **kwargs: {
+            "snapshot_date": "2026-08-23",
+            "models": [
+                {"provider": "google", "id": "gemini-pro-latest", "sources": {"models_dev": "2026-08-23"}},
+                {"provider": "anthropic", "id": "claude-opus-5", "sources": {"models_dev": "2026-08-23"}},
+            ],
+        },
+    )
+    fact = {
+        "convention": "-latest suffix",
+        "maintained": True,
+        "verified": "2026-08-10",
+        "note": "Gemini keeps this live.",
+    }
+    monkeypatch.setattr(
+        module, "_resolve_alias",
+        lambda provider, model_id: fact if model_id == "gemini-pro-latest" else None,
+    )
+    assert module.main() == 0
+
+    built = json.loads((tmp_path / "ledger-ai.json").read_bytes())
+    by_id = {m["id"]: m for m in built["models"]}
+    assert by_id["gemini-pro-latest"]["alias"] == fact
+    assert "alias" not in by_id["claude-opus-5"]

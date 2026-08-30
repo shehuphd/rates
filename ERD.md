@@ -110,6 +110,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-08-23", "litellm": "2026-08-23"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
 | `lifecycle` | `LIFECYCLE` | models.dev (`status`, `release_date`) + LiteLLM (`deprecation_date`) | See below |
 | `observed_at` | datetime \| absent | Not supplied for AI | A UTC instant recording when this record's underlying value was observed upstream. Absent in the AI domain: list prices are announced, not observed to the second, and no source dates a price that finely. It exists on the record so a domain whose values move continuously (a market price) fills a stricter value into a field already present, rather than a later domain forcing a breaking change to add it. Distinct from the envelope's `snapshot_date` (a release's calendar identity) and from a source's `fetched_at` (when we reached the source): this is when the *value* was true |
+| `alias` | `ALIAS` \| absent | KeyCall's per-provider alias-convention catalog, baked in at ledger-build time | Absent for a dated/pinned id, or a provider with no recorded convention. See below |
 
 ### Why `type` is a separate field from `modalities`
 
@@ -202,6 +203,32 @@ Reasoning-effort control differs enough across models that a single range doesn'
 Each entry in `levels` pairs a `label` (the string an API call needs) with a `rank` (its position in that model's own ascending order, for a caller doing arithmetic, "give me this model's cheapest reasoning setting," "give me the midpoint, rounded down"). The rank is only comparable within one model's own `levels`, `medium` on one model and `medium` on another aren't claimed to cost the same.
 
 `effort_parameter_required` and `can_disable_reasoning` are deliberately two separate booleans, not one. A model can require no explicit parameter (a default effort applies) while still never allowing reasoning to be switched off, `claude-opus-5` is this very case, `mandatory: false` upstream (the parameter is optional) but no `none` in its values (you can't disable it if you try).
+
+## `ALIAS`
+
+Whether this record's own `id` is a rolling reference (`gemini-pro-latest`, `gpt-5.6-chat-latest`) rather than a dated snapshot, per [KeyCall](https://pypi.org/project/keycall)'s per-provider naming-convention catalog. Computed at ledger-build time only, by a maintainer/CI script, never by the installed `rates` package: the fact ships baked into the ledger, so a plain `pip install rates` never needs KeyCall installed. See ARCHITECTURE.md § alias facts.
+
+| Field | Type | Notes |
+|---|---|---|
+| `convention` | string | Which recorded naming rule matched, e.g. `"-latest suffix"` |
+| `maintained` | bool \| null | Tri-state, about callability, not pricing: `true` means the provider keeps the alias aimed at a live model (Gemini/DeepSeek-style); `false` means the alias family has been observed going stale or dead (OpenAI's `-chat-latest` family, 2026-08-10); `null` means the convention is recorded but liveness hasn't been checked. Absent is never guessed as `false` |
+| `verified` | date | Date of the catalog evidence backing this fact |
+| `note` | string | One sentence of that evidence |
+
+A rolling id's price still keys on the dated snapshot the alias currently points to, same as any other record; `maintained` says nothing about whether that price is right, only whether the id itself is safe to call. This field is absent, not `false`, for a dated id and for a provider KeyCall has no recorded convention for, the same never-guess rule the rest of the schema follows for `tool_call`/`structured_output`.
+
+```json
+{
+  "provider": "google",
+  "id": "gemini-pro-latest",
+  "alias": {
+    "convention": "-latest suffix",
+    "maintained": true,
+    "verified": "2026-08-10",
+    "note": "Gemini keeps this aimed at a live model; the provider dates nothing and retires nothing from its list."
+  }
+}
+```
 
 ## `LIFECYCLE`
 

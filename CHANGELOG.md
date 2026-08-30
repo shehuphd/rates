@@ -19,6 +19,7 @@ First functional release.
 - A neutral cross-domain record contract (`Record`) and a single domain registry that the CLI and loader read, so adding a domain is a spec entry rather than an edit to the loader or query code, and each domain declares which access tiers it supports.
 - The zsh completion script works both ways: sourced from `.zshrc` or dropped into an `$fpath` directory as `_rates` and autoloaded (a `#compdef` tag plus a sourced-vs-autoloaded guard). USAGE documents install and uninstall for every shell, and that wiring it up is opt-in and a persistent change to shell startup.
 - Faster startup and tab completion: traceact is imported on the first traced call rather than at import, completion is dispatched before tracing is set up, and the completion path no longer imports a domain to find its cache or stat a bundled file. `rates --version` roughly halved; a warm completion no longer imports the AI domain or traceact at all.
+- `Model.alias`: whether a record's own `id` is a rolling reference (`gemini-pro-latest`) rather than a dated snapshot, per KeyCall's per-provider convention catalog. Baked into the ledger at build time only; the installed package stays zero-dependency, and `fetch="live"` carries no `alias` field.
 
 Full manual: [USAGE.md](https://github.com/shehuphd/rates/blob/main/USAGE.md)
 
