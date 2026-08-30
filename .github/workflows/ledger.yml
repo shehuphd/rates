@@ -27,7 +27,7 @@ jobs:
         env:
           RATES_LIVE_PROBES: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python -m pytest tests/test_source_probes.py -q
+        run: python -m pytest tests/test_source_probes.py tests/test_keycall_probe.py -q
 
       - name: Build ledger
         env:
