@@ -6,7 +6,7 @@ First functional release.
 
 ### Added
 
-- The AI pricing domain: ~7,000 models (2026-08-24 snapshot) fused from four sources (models.dev preferred; genai-prices, LiteLLM, and OpenRouter filling and cross-validating), with per-record source attribution and price disagreements past 2% stored on the record.
+- The AI pricing domain: ~7,000 models (2026-08-30 snapshot) fused from four sources (models.dev preferred; genai-prices, LiteLLM, and OpenRouter filling and cross-validating), with per-record source attribution and price disagreements past 2% stored on the record.
 - Three access tiers, picked by one `fetch` parameter: a bundled offline snapshot (`rates.ai.load()`, the default), a cheap published-ledger check (`load(fetch="stable")`), and a full independent fusion of the raw sources (`load(fetch="live")`), all returning the same `Registry`.
 - The query API: `Registry.filter()` with case-insensitive exact matching, explicit `*_contains` substring matching, and unit-explicit price bounds; `sort_by()` with a required direction; `price_units()`; `Model.price_for()` resolving tiered prices; `Model.to_dict()` emitting ledger-shaped JSON.
 - The schema: flat per-unit prices (never blended), price tiers with open-shaped conditions, three reasoning control forms (`effort`, `budget_tokens`, `toggle`), split context limits, and lifecycle with deprecation dates.
