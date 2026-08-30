@@ -849,6 +849,10 @@ def _render_show(
         _kv("status", m.lifecycle.status)
         _kv("released", m.lifecycle.release_date)
         _kv("deprecated", m.lifecycle.deprecation_date)
+        alias = getattr(m, "alias", None)
+        if alias is not None:
+            _kv("rolling alias", f"{alias.convention} ({_alias_liveness(alias)})")
+            _kv("  evidence", alias.note)
         _kv("modalities in", ", ".join(m.modalities.input))
         _kv("modalities out", ", ".join(m.modalities.output))
         _kv("context in", m.context.input)
@@ -883,6 +887,16 @@ def _render_show(
         _kv("sources", ", ".join(sorted(m.sources)))
         print()
     return 0
+
+
+def _alias_liveness(alias: Any) -> str:
+    """One phrase for the show view: what the alias's maintained tri-state
+    says about calling this id, with the evidence date attached."""
+    if alias.maintained is True:
+        return f"kept aimed at a live model, verified {alias.verified}"
+    if alias.maintained is False:
+        return f"observed stale, {alias.verified}"
+    return f"liveness unverified, convention recorded {alias.verified}"
 
 
 def _budget_text(low: int | None, high: int | None) -> str:

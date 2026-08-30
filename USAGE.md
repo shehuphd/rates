@@ -331,7 +331,19 @@ for d in model.price_discrepancies:
     print(d.field, d.chosen_value, "vs", d.other_source, d.other_value)
 ```
 
-The full field-by-field schema, including the reasoning control forms (`effort`, `budget_tokens`, `toggle`) and lifecycle fields, is in [ERD.md](ERD.md).
+Some model ids are rolling references rather than dated snapshots (`gemini-pro-latest`, `gpt-5.2-chat-latest`): the provider retargets them over time, so today's price belongs to whatever the alias currently points at. Where the id matches a recorded, evidence-backed naming convention for its provider, the record carries that as `alias`:
+
+```python
+if model.alias is not None:
+    model.alias.convention   # "-latest suffix"
+    model.alias.maintained   # True (kept aimed at a live model), False (observed stale), None (unverified)
+    model.alias.verified     # date of the backing evidence
+    model.alias.note         # one sentence of that evidence
+```
+
+`alias` is `None` for a dated or pinned id, and for any provider without a recorded convention; it's never guessed from the id's shape alone. `maintained` describes whether the id is safe to call, not whether the price is right, since pricing always reflects the model the alias currently resolves to. `rates ai show <model>` prints the fact, and `--json` carries it in the record.
+
+The full field-by-field schema, including the reasoning control forms (`effort`, `budget_tokens`, `toggle`), lifecycle fields, and the alias fact, is in [ERD.md](ERD.md).
 
 ## The data
 

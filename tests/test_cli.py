@@ -64,6 +64,19 @@ FIXTURE = {
             "price": {"currency": "USD", "output_per_second": 0.15},
             "lifecycle": {"status": "beta"},
         },
+        {
+            "provider": "gemini",
+            "id": "gemini-pro-latest",
+            "type": "chat",
+            "price": {"currency": "USD", "input_mtok": 1.25, "output_mtok": 10},
+            "lifecycle": {"status": "active"},
+            "alias": {
+                "convention": "-latest suffix",
+                "maintained": True,
+                "verified": "2026-08-09",
+                "note": "Gemini keeps this aimed at a live model.",
+            },
+        },
     ],
 }
 
@@ -200,6 +213,22 @@ def test_show_renders_full_detail(capsys):
     assert "input_mtok: 5" in out
 
 
+def test_show_renders_the_alias_fact(capsys):
+    code, out, _ = run(capsys, "ai", "show", "gemini/gemini-pro-latest")
+    assert code == 0
+    assert (
+        "rolling alias: -latest suffix "
+        "(kept aimed at a live model, verified 2026-08-09)" in out
+    )
+    assert "evidence: Gemini keeps this aimed at a live model." in out
+
+
+def test_show_stays_silent_for_a_dated_id_with_no_alias(capsys):
+    code, out, _ = run(capsys, "ai", "show", "anthropic/claude-opus-5")
+    assert code == 0
+    assert "rolling alias" not in out
+
+
 def test_show_surfaces_price_discrepancies(capsys):
     _, out, _ = run(capsys, "ai", "show", "openrouter/deepseek/deepseek-chat-v3.1")
     assert "genai_prices reports input_mtok as 0.21" in out
@@ -275,12 +304,12 @@ def test_sort_descending(capsys):
 
 def test_limit_and_footer(capsys):
     _, out, _ = run(capsys, "ai", "list", "--limit", "2")
-    assert "2 of 4 shown" in out
+    assert "2 of 5 shown" in out
 
 
 def test_limit_zero_shows_all(capsys):
     _, out, _ = run(capsys, "ai", "list", "--limit", "0")
-    assert "4 results" in out
+    assert "5 results" in out
     assert "shows all" not in out  # never truncated, so no --limit-0 tip needed
 
 
@@ -663,7 +692,7 @@ def test_info_reports_snapshot_sources_and_counts(capsys):
     code, out, _ = run(capsys, "ai", "info")
     assert code == 0
     assert "snapshot: 2026-08-22" in out
-    assert "models: 4" in out
+    assert "models: 5" in out
     assert "aren't listed" in out  # coverage disclaimer
     assert "preferred" not in out and "fallback" not in out
 
@@ -682,7 +711,7 @@ def test_info_json(capsys):
     _, out, _ = run(capsys, "info", "--json")
     (envelope,) = json.loads(out)
     assert envelope["domain"] == "ai"
-    assert envelope["models"] == 4
+    assert envelope["models"] == 5
     assert envelope["schema_version"] == "1.0.0"
 
 
