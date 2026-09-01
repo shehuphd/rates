@@ -10,8 +10,8 @@ staleness check stop hardcoding one domain's name and one domain's number.
 A domain's loader is named, not imported, here: `load_target` is a
 ``"module:attr"`` string resolved on first use, so importing this registry
 (which the CLI does on every invocation, tab completion included) does NOT drag
-the whole AI domain and its fusion machinery into the process. Only actually
-loading a registry pays that cost.
+the whole AI domain and its fusion machinery into the process. Only loading
+a registry pays that cost.
 """
 
 from __future__ import annotations

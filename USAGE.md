@@ -35,7 +35,7 @@ PROVIDER  MODEL         TYPE  IN $/MTOK  OUT $/MTOK  STATUS
 302ai     MiniMax-M2.1  chat  0.3        1.2         active
 ...
 
-20 of 6889 shown (--limit 0 shows all)
+20 of 7126 shown (--limit 0 shows all)
 ```
 
 Everything about one model:
@@ -199,7 +199,7 @@ Since `stable`/`live` make a network call, the CLI (not the Python API) prints a
 
 `rates` prints a completion script for your shell on demand; wiring it up is opt-in and something you do yourself. `rates` never edits your shell configuration for you. Completion is per-shell: it's active only in shells whose startup loads it, so a one-off `eval`/`source` in the current shell lasts until you close that window. To keep it, add one of the lines below to your shell's startup file, which is a persistent change to how your shell starts. Each has an uninstall step.
 
-**bash** — add to `~/.bashrc`:
+**bash**: add to `~/.bashrc`:
 
 ```bash
 eval "$(rates completion bash)"
@@ -207,7 +207,7 @@ eval "$(rates completion bash)"
 
 Uninstall: delete that line.
 
-**zsh** — the completion system must be initialized first (`autoload -Uz compinit && compinit`, which most configurations already run). Two routes:
+**zsh**: the completion system must be initialized first (`autoload -Uz compinit && compinit`, which most configurations already run). Two routes:
 
 - Simplest, add to `~/.zshrc` below your `compinit`:
 
@@ -225,7 +225,7 @@ Uninstall: delete that line.
 
   The generated script carries a `#compdef` tag, so the same output works either sourced or autoloaded from `$fpath`. Uninstall: delete the `_rates` file.
 
-**fish** — write it where fish auto-loads completions; no config edit:
+**fish**: write it where fish auto-loads completions; no config edit:
 
 ```bash
 rates completion fish > ~/.config/fish/completions/rates.fish
@@ -233,7 +233,7 @@ rates completion fish > ~/.config/fish/completions/rates.fish
 
 Uninstall: delete that file.
 
-**PowerShell** — add to your `$PROFILE`:
+**PowerShell**: add to your `$PROFILE`:
 
 ```powershell
 rates completion powershell | Out-String | Invoke-Expression

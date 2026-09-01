@@ -248,7 +248,7 @@ The one axis flagged as most important to get right: knowing whether a model is 
 | Blended `$/mtok` | Assumes a fixed input:output usage ratio that isn't true for every caller. Raw per-unit prices let the caller blend it themselves |
 | `benchmarks` (third-party Elo/index scores, available from OpenRouter) | Someone else's opinion of quality, not a fact about price or capability. `rates` is a pricing registry, not a benchmark aggregator |
 | `open_weights` | Not carried; open-weight provenance isn't a pricing fact, and nothing in the current fusion supplies it |
-| Per-model `last_updated` (AI domain) | In the AI domain a source's per-model `last_updated` mirrors its own sync cadence more than any change to the model, so it isn't carried: the AI ledger ships dated, versioned snapshots, and "did this change" is answered by diffing two releases. This reasoning is specific to a domain whose prices are announced and change rarely. A domain whose values are observed continuously (a market price) records freshness per record through `observed_at` instead, a field the schema already carries for exactly that case |
+| Per-model `last_updated` (AI domain) | In the AI domain a source's per-model `last_updated` mirrors its own sync cadence more than any change to the model, so it isn't carried: the AI ledger ships dated, versioned snapshots, and "did this change" is answered by diffing two releases. This reasoning is specific to a domain whose prices are announced and change rarely. A domain whose values are observed continuously (a market price) records freshness per record through `observed_at` instead, a field the schema already carries for that case |
 
 ## Worked example
 

@@ -566,7 +566,7 @@ def test_long_example_command_gets_its_own_line(capsys):
     assert long_cmd.strip().startswith("rates ai filter")
     blurb_line = lines[lines.index(long_cmd) + 1]
     # Its own line, not sharing the long command's line, and not
-    # indented out to the short commands' column (which would land
+    # indented out to the short commands' column (which would fall
     # mid-flag on the line above it).
     assert "rates ai" not in blurb_line
     assert blurb_line.strip() == "narrow by any fields"

@@ -76,7 +76,7 @@ def _identity(url: str) -> str:
 
 def test_notice_covers_every_upstream_source():
     # Every source the fusion fetches contributes to the ledger shipped in
-    # the wheel, so each one's attribution has to travel with it. A fifth
+    # the wheel, so each one's attribution has to ship with it. A fifth
     # source added without a NOTICE entry fails here.
     from rates.ai._sources import SOURCE_URLS
 

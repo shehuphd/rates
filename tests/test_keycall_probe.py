@@ -1,4 +1,4 @@
-"""Capability-drift probe: keycall's real, installed alias_fact contract
+"""Capability-drift probe: the installed keycall release's alias_fact contract
 still has the shape scripts/build_ledger.py._resolve_alias relies on.
 
 Unlike tests/test_source_probes.py this doesn't hit the network: keycall's

@@ -98,7 +98,7 @@ DEFAULT_LIMIT = 20
 
 def _error_label() -> str:
     """"Error:" in red on a color-capable terminal, plain otherwise: one
-    word, not the whole message, so the eye has something to land on
+    word, not the whole message, so the eye has something to fix on
     without the line turning into noise. The bright variant (91), not
     the base 16-color red (31), which renders duller on most terminal
     themes, the same reasoning as _warning_label's bright yellow. Off

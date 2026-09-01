@@ -198,7 +198,7 @@ def test_live_does_not_warn_when_every_source_is_reachable(
 
 
 def test_a_warm_cache_does_not_re_warn(isolated_cache, monkeypatch):
-    # The warning describes a fusion that actually ran degraded; a cached
+    # The warning describes a fusion that ran degraded; a cached
     # result skips fetch_sources entirely, so the second read is silent.
     _live_with_statuses(
         monkeypatch,

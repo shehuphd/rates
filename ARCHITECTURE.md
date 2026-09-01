@@ -140,7 +140,7 @@ class PreferredSourceUnavailableError(LiveFusionError): ...  # models.dev specif
 - No HTTP client dependency: `stable` and `live` run on a small stdlib (`urllib`) helper, so the entire package installs with zero dependencies and live checking works out of the box, opt-in by calling it, nothing extra to install.
 - `Registry.filter(...)`, not `recommend(...)`. `recommend` implies a judgment call about which model is right; `filter` narrows a set by facts the caller supplied (budget, required modality, reasoning capability, still active) and can return zero, one, or many matches, `rates` has no view on which of those is best.
 - Sorting is a separate chained call, `Registry.filter(...).sort_by(field, descending=...)`, never a `filter()` parameter. They're different jobs (narrowing vs. ordering), and a caller may want to sort without filtering at all. `descending` is always stated explicitly, no field defaults to a "good" direction, that would be another opinion smuggled into the interface.
-- Model records are stdlib `dataclasses`, not Pydantic. Pydantic would land as a mandatory dependency on the default `ledger` install path, not just `live`, breaking the zero-dependency, air-gapped-safe promise for the common case.
+- Model records are stdlib `dataclasses`, not Pydantic. Pydantic would arrive as a mandatory dependency on the default `ledger` install path, not just `live`, breaking the zero-dependency, air-gapped-safe promise for the common case.
 
 ### Alias facts: a build-time dependency that never reaches an installed package
 

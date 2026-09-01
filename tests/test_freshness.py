@@ -1,6 +1,6 @@
 """Tests for _freshness.py: Atom feed parsing, the on-disk cache and its
 TTL, and the two public lookups' degrade-to-None behavior. Network calls
-are never made here — _get_bytes is monkeypatched throughout."""
+are never made here: _get_bytes is monkeypatched throughout."""
 
 import json
 from datetime import date, datetime, timedelta, timezone

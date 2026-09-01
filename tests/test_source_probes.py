@@ -90,7 +90,7 @@ def test_openrouter_reasoning_object_still_carries_mandatory(token):
     ]
     assert with_reasoning, (
         "OpenRouter's per-model reasoning object is gone; it's the only "
-        "source for effort_parameter_required and default effort — update "
+        "source for effort_parameter_required and default effort; update "
         "normalize_openrouter and ERD.md's REASONING section"
     )
     assert any("mandatory" in r["reasoning"] for r in with_reasoning), (
@@ -100,7 +100,7 @@ def test_openrouter_reasoning_object_still_carries_mandatory(token):
 
 def test_fallback_only_admissions_stay_consistent(token):
     """Every fallback-only model clearing the admission bar appears in the
-    fused output — a live consistency check on ARCHITECTURE.md's admission
+    fused output, a live consistency check on ARCHITECTURE.md's admission
     criteria, run on the weekly cycle."""
     from rates.ai._fusion import _admit_fallback_only, fuse
     from rates.ai._sources import (

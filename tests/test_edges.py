@@ -50,7 +50,7 @@ def test_date_only_instant_floors_to_midnight_utc():
 
 def test_zulu_instant_parses_on_python_310():
     # datetime.fromisoformat rejects a trailing "Z" before 3.11; the parser
-    # normalizes it so a real sub-second stamp round-trips on 3.10.
+    # normalizes it so a sub-second stamp round-trips on 3.10.
     dt = _parse_instant("2026-08-24T14:03:11.204Z")
     assert dt.tzinfo == timezone.utc
     assert dt.hour == 14 and dt.microsecond == 204000
