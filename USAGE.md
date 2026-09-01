@@ -172,12 +172,12 @@ domain: ai
   snapshot: 2026-08-23 (1 day old)
   models: 6889
   providers: 184
-  type known: 3380 of 6889 (untyped models never match --type)
-  sources: ok (checked 2026-08-23)
+  type known: 3897 of 7109 (untyped models never match --type)
+  sources: ok (checked 2026-09-01)
   Note: Services with unpublished, inaccessible, or non-unit pricing (subscriptions, platform bundles) aren't listed.
 ```
 
-The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-08-23; two sources inaccessible`) when some didn't.
+The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-09-01; two sources inaccessible`) when some didn't.
 
 Past 28 days, commands print a staleness warning with the ways to refresh. One flag fetches fresher data on demand, on any command:
 
@@ -324,12 +324,14 @@ model.price.get("input_mtok")                       # base rate
 model.price_for(context=500_000).get("input_mtok")  # rate with tier overrides applied
 ```
 
-Where two sources disagreed about a price by more than 2%, the disagreement is stored on the record rather than discarded:
+Where sources disagreed about a price by more than 2%, the disagreement is stored on the record rather than discarded. Which value ships is decided by a fixed resolution ladder (first-party sources end the contest for their own providers' rows, then freshest update evidence, down to a declared order that can never tie); every note's `chosen_value` is the value that shipped in `price`, however many sources disagreed, and `resolved_by` names the deciding rung:
 
 ```python
 for d in model.price_discrepancies:
-    print(d.field, d.chosen_value, "vs", d.other_source, d.other_value)
+    print(d.field, d.chosen_value, "vs", d.other_source, d.other_value, f"({d.resolved_by})")
 ```
+
+The full ladder, and the per-source scorecards each build ships in its own envelope, are covered in [ARCHITECTURE.md](ARCHITECTURE.md) and [ERD.md](ERD.md).
 
 Some model ids are rolling references rather than dated snapshots (`gemini-pro-latest`, `gpt-5.2-chat-latest`): the provider retargets them over time, so today's price belongs to whatever the alias currently points at. Where the id matches a recorded, evidence-backed naming convention for its provider, the record carries that as `alias`:
 
