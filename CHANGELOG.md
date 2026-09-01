@@ -25,6 +25,10 @@ First functional release, shipped under a pre-1.0 version number so the PyPI pub
 - The envelope's `resolution` object: the ladder and each source's scorecard (first-party pairings, declared order, coverage, and evidence fields that stay `null` until measured), so any record's resolution is replayable and auditable from the ledger file alone.
 - LiteLLM-derived per-mtok rates round away the unit-conversion float artifact (a per-token rate times a million multiplies to `0.19999999999999998` in binary floats; the ledger now carries `0.2`, the source's decimal intent).
 
+### Fixed
+
+- The CLI's typo suggestions and choice-error messages read argparse's own error text to build their choice list. Python 3.12 stopped quoting each choice in that text (`choose from a, b` instead of `choose from 'a', 'b'`), which emptied the CLI's rendered list under 3.12 while it still worked under 3.10. Parsing no longer requires the quotes.
+
 Full manual: [USAGE.md](https://github.com/shehuphd/rates/blob/main/USAGE.md)
 
 ## v0.0.3 (2026-08-16)
