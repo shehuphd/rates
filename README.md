@@ -27,7 +27,7 @@ PROVIDER  MODEL         TYPE  IN $/MTOK  OUT $/MTOK  STATUS
 302ai     MiniMax-M2.1  chat  0.3        1.2         active
 ...
 
-20 of 7126 shown (--limit 0 shows all)
+20 of 7109 shown (--limit 0 shows all)
 ```
 
 ```bash
