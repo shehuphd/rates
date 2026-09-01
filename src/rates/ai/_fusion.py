@@ -8,17 +8,17 @@ network half, degrading per source rather than failing whole; freshness
 data (see ``_freshness.py``) is gathered separately by the caller and
 passed in, so ``fuse()`` itself never performs a network call on its own.
 
-Merge rules (see ERD.md): models.dev is the preferred source and fills
-any unit it carries; genai-prices and LiteLLM fill units and fields it
-lacks, and each cross-validates the units it shares with the preferred
-source. Where they disagree past 2%, which value ships is decided by
-freshness first (whichever source's underlying data changed more
-recently), falling back to a fixed per-field preference order when
-freshness can't decide (see ``PRICE_PREFERENCE`` and ARCHITECTURE.md §
-Resolving price disagreements); the disagreement itself is recorded on
-the model as ``price_discrepancies`` either way. OpenRouter fills
-modality gaps. A record exists in the output when the preferred source
-carries it.
+Merge rules (see ERD.md): models.dev is the ingestion spine (a record
+exists in the output when it carries it, plus the fallback-only
+admissions); genai-prices and LiteLLM fill units and fields it lacks,
+and cross-validate the units they share. Each price unit resolves
+independently: uncontested units (every carrier within the 2% threshold
+of the registry-first carrier's value) ship that value silently, and a
+contested unit runs the resolution ladder (``rates._resolution``) over
+every carrier, ships the winner's value, and records every carrier
+still past the threshold from the shipped value as a
+``price_discrepancies`` note, ``resolved_by`` naming the rung that
+decided. OpenRouter fills modality gaps and carries no prices.
 """
 
 from __future__ import annotations
@@ -30,8 +30,10 @@ from typing import Any
 
 from .._errors import AllSourcesUnreachableError, PreferredSourceUnavailableError
 from .._http import FetchError, fetch_json
+from .._resolution import LADDER, Candidate, SourceCard, resolve
 from .._trace import traced
 from ._sources import (
+    SOURCE_CARDS,
     SOURCE_URLS,
     normalize_genai_prices,
     normalize_litellm,
@@ -46,13 +48,17 @@ from ._sources import (
 SCHEMA_VERSION = "1.0.0"
 DISCREPANCY_THRESHOLD_PCT = 2.0
 
-# Fallback order for a price disagreement freshness can't settle:
-# whichever of the two disagreeing sources appears first here wins. A
-# starting point, not a permanent ranking: revise as evidence
-# accumulates about which source tends to be more current. See
-# ARCHITECTURE.md § Resolving price disagreements for why this is a
-# fallback and not the first check.
-PRICE_PREFERENCE: tuple[str, ...] = ("models_dev", "litellm", "genai_prices")
+# The declared strict total order over sources, derived from the
+# scorecards' registry_rank: the ladder's determinism floor, and the
+# fill order for uncontested units. The price-carrying sources, best
+# rank first (openrouter carries no prices and never appears in a
+# price contest).
+_PRICE_SOURCES: tuple[str, ...] = tuple(
+    sorted(
+        (n for n in SOURCE_CARDS if n != "openrouter"),
+        key=lambda n: SOURCE_CARDS[n].registry_rank,
+    )
+)
 
 _NORMALIZERS: dict[str, Callable[[Any], dict[tuple[str, str], dict[str, Any]]]] = {
     "models_dev": normalize_models_dev,
@@ -122,12 +128,12 @@ def fuse(
     Pure: no network of its own, no clock beyond stamping today's
     snapshot date. ``source_freshness`` (a plain dict) and
     ``record_freshness`` (a callable) are optional pre-fetched inputs
-    used only to resolve a price disagreement between the preferred
-    source and one fallback; the network call each represents, when
-    there is one, already happened before ``fuse()`` was called. Neither
-    supplied means every disagreement falls back to ``PRICE_PREFERENCE``.
-    A payload of None (source skipped) contributes nothing and its status
-    travels in the envelope.
+    consulted only by the ladder's freshness rung, and only for a
+    contested unit; the network call each represents, when there is one,
+    already happened before ``fuse()`` was called. Neither supplied
+    means the freshness rung can't rank and falls through (see
+    ``rates._resolution``). A payload of None (source skipped)
+    contributes nothing and its status travels in the envelope.
     """
     statuses = statuses or {name: "ok" for name in payloads}
     now = datetime.now(timezone.utc)
@@ -145,6 +151,7 @@ def fuse(
     openrouter_ids, openrouter_reasoning = _openrouter_by_bare_id(
         normalized["openrouter"]
     )
+    cards = _cards_with_coverage(normalized)
 
     models = []
     for key, base in normalized["models_dev"].items():
@@ -159,6 +166,7 @@ def fuse(
             openrouter_reasoning=openrouter_reasoning,
             source_freshness=source_freshness,
             record_freshness=record_freshness,
+            cards=cards,
         )
         # Admission criterion 2: a record in a pricing registry that can't
         # answer any price question serves nobody. An explicit zero rate
@@ -185,7 +193,31 @@ def fuse(
             }
             for name in SOURCE_URLS
         ],
+        # The resolution machinery this build was decided with: the rung
+        # order and each source's scorecard as consulted, so any record's
+        # resolution is replayable from the ledger file alone.
+        "resolution": {
+            "ladder": list(LADDER),
+            "sources": {name: card.to_dict() for name, card in cards.items()},
+        },
         "models": models,
+    }
+
+
+def _cards_with_coverage(
+    normalized: dict[str, dict[tuple[str, str], dict[str, Any]]],
+) -> dict[str, SourceCard]:
+    """This build's scorecards: the declared standing plus per-run
+    coverage, the fraction of this build's input records each source
+    carries. Computed from the normalized inputs before any merge, so
+    the coverage rung consults the same number on every unit."""
+    from dataclasses import replace
+
+    universe = {key for records in normalized.values() for key in records}
+    total = len(universe) or 1
+    return {
+        name: replace(card, coverage=round(len(normalized.get(name, {})) / total, 4))
+        for name, card in SOURCE_CARDS.items()
     }
 
 
@@ -231,30 +263,85 @@ def _openrouter_by_bare_id(
     return ids, reasoning
 
 
-def _resolve_price_winner(
-    other_name: str,
+def _divergence_pct(a: float, b: float) -> float:
+    magnitude = max(abs(a), abs(b))
+    return abs(a - b) / magnitude * 100 if magnitude else 0.0
+
+
+def _resolve_prices(
+    carriers: dict[str, dict[str, float]],
+    provider: str,
     model_key: tuple[str, str],
+    cards: dict[str, SourceCard],
     source_freshness: dict[str, date | None] | None,
     record_freshness: Callable[[str, str], date | None] | None,
-) -> tuple[str, str]:
-    """Which of models_dev and ``other_name`` wins a price disagreement:
-    whichever source's underlying data changed more recently, falling
-    back to PRICE_PREFERENCE when freshness can't decide (a lookup
-    unreachable, or the two dates tied). Returns (winner, "freshness" |
-    "preference")."""
-    preferred_date = record_freshness(*model_key) if record_freshness else None
-    other_date = (source_freshness or {}).get(other_name)
-    if (
-        preferred_date is not None
-        and other_date is not None
-        and preferred_date != other_date
-    ):
-        winner = "models_dev" if preferred_date > other_date else other_name
-        return winner, "freshness"
-    for candidate in PRICE_PREFERENCE:
-        if candidate in ("models_dev", other_name):
-            return candidate, "preference"
-    return "models_dev", "preference"  # unreachable: PRICE_PREFERENCE covers both
+) -> tuple[dict[str, float], list[dict[str, Any]], set[str]]:
+    """Resolve one record's price, unit by unit, through the ladder.
+
+    ``carriers`` maps source name to the units that source reports for
+    this record. An uncontested unit (every carrier within the
+    discrepancy threshold of the registry-first carrier's value) ships
+    that value silently; a contested one runs the ladder over all its
+    carriers, ships the winner's value, and writes one note per carrier
+    still past the threshold from the shipped value, every note's
+    ``chosen_value`` being the shipped value and ``resolved_by`` the
+    rung that decided. Returns (price, notes, contributing sources).
+    The per-record models.dev freshness lookup (a bounded network call)
+    runs at most once per record, and only for a contested one.
+    """
+    price: dict[str, float] = {}
+    notes: list[dict[str, Any]] = []
+    contributed: set[str] = set()
+    freshness: dict[str, date | None] | None = None
+
+    units = sorted({u for units_map in carriers.values() for u in units_map})
+    for unit in units:
+        candidates = [
+            Candidate(name, carriers[name][unit])
+            for name in _PRICE_SOURCES
+            if unit in carriers.get(name, {})
+        ]
+        first = candidates[0]
+        if all(
+            _divergence_pct(first.value, c.value) <= DISCREPANCY_THRESHOLD_PCT
+            for c in candidates[1:]
+        ):
+            price[unit] = first.value
+            contributed.add(first.source)
+            continue
+
+        if freshness is None:
+            freshness = {
+                **(source_freshness or {}),
+                "models_dev": (
+                    record_freshness(*model_key) if record_freshness else None
+                ),
+            }
+        resolution = resolve(
+            candidates, cards=cards, provider=provider, freshness=freshness
+        )
+        shipped = resolution.winner.value
+        price[unit] = shipped
+        contributed.add(resolution.winner.source)
+        for candidate in candidates:
+            pct = _divergence_pct(shipped, candidate.value)
+            if candidate.source == resolution.winner.source or (
+                pct <= DISCREPANCY_THRESHOLD_PCT
+            ):
+                continue
+            contributed.add(candidate.source)
+            notes.append(
+                {
+                    "field": unit,
+                    "chosen_source": resolution.winner.source,
+                    "chosen_value": shipped,
+                    "other_source": candidate.source,
+                    "other_value": candidate.value,
+                    "resolved_by": resolution.resolved_by,
+                    "difference_pct": round(pct, 1),
+                }
+            )
+    return price, notes, contributed
 
 
 def _merge_one(
@@ -268,60 +355,24 @@ def _merge_one(
     openrouter_reasoning: dict[str, dict[str, Any]] | None = None,
     source_freshness: dict[str, date | None] | None = None,
     record_freshness: Callable[[str, str], date | None] | None = None,
+    cards: dict[str, SourceCard] | None = None,
 ) -> dict[str, Any]:
-    price = dict(base["price"])
-    contributed = {"models_dev"}
-    discrepancies = []
     model_key = (base["provider"], base["id"])
-
-    # Fallbacks fill units the preferred source lacks entirely; there's
-    # only one value, so nothing to resolve.
-    for name, partial in (("litellm", litellm), ("genai_prices", genai)):
-        if not partial:
-            continue
-        filled = False
-        for unit, rate in partial.get("price", {}).items():
-            if unit not in price:
-                price[unit] = rate
-                filled = True
-        if filled:
-            contributed.add(name)
-
-    # Every fallback cross-validates the units it shares with the
-    # preferred source. Which value ships is resolved by freshness first,
-    # falling back to PRICE_PREFERENCE, see _resolve_price_winner.
-    for name, partial in (("genai_prices", genai), ("litellm", litellm)):
-        if not partial:
-            continue
-        for unit, other in partial.get("price", {}).items():
-            ours = base["price"].get(unit)
-            if ours is None or other == ours:
-                continue
-            magnitude = max(abs(ours), abs(other))
-            pct = abs(ours - other) / magnitude * 100 if magnitude else 0.0
-            if pct > DISCREPANCY_THRESHOLD_PCT:
-                contributed.add(name)
-                winner, resolved_by = _resolve_price_winner(
-                    name, model_key, source_freshness, record_freshness
-                )
-                if winner == "models_dev":
-                    chosen_source, chosen_value = "models_dev", ours
-                    other_source, other_value = name, other
-                else:
-                    chosen_source, chosen_value = name, other
-                    other_source, other_value = "models_dev", ours
-                    price[unit] = other
-                discrepancies.append(
-                    {
-                        "field": unit,
-                        "chosen_source": chosen_source,
-                        "chosen_value": chosen_value,
-                        "other_source": other_source,
-                        "other_value": other_value,
-                        "resolved_by": resolved_by,
-                        "difference_pct": round(pct, 1),
-                    }
-                )
+    price, discrepancies, contributed = _resolve_prices(
+        carriers={
+            "models_dev": dict(base["price"]),
+            "litellm": dict((litellm or {}).get("price", {})),
+            "genai_prices": dict((genai or {}).get("price", {})),
+        },
+        provider=base["provider"],
+        model_key=model_key,
+        cards=cards if cards is not None else SOURCE_CARDS,
+        source_freshness=source_freshness,
+        record_freshness=record_freshness,
+    )
+    # The record exists because the spine carries it, whatever its price
+    # units resolved to.
+    contributed.add("models_dev")
 
     bare_id = base["id"].casefold()
     model_type = None
@@ -381,8 +432,7 @@ def _merge_one(
             reasoning = {**reasoning, "default": enrichment["reasoning_default"]}
             contributed.add("openrouter")
 
-    if price:
-        price = {"currency": "USD", **price}
+    priced: dict[str, Any] = {"currency": "USD", **price} if price else {}
 
     return {
         "provider": base["provider"],
@@ -393,7 +443,7 @@ def _merge_one(
         "context": context,
         "tool_call": base["tool_call"],
         "structured_output": base["structured_output"],
-        "price": price,
+        "price": priced,
         "price_tiers": price_tiers,
         "price_discrepancies": discrepancies,
         "reasoning": reasoning,
@@ -449,7 +499,10 @@ def _admit_fallback_only(
         if not agreement:
             continue
 
-        price = {**litellm["price"], **genai["price"]}
+        # Shared units agree within the threshold by the admission gate
+        # above; fill order follows the registry order (litellm outranks
+        # genai_prices), the same order uncontested units ship in.
+        price = {**genai["price"], **litellm["price"]}
         required = _REQUIRED_UNITS.get(model_type)
         if required and not required <= set(price):
             continue

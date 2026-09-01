@@ -14,11 +14,31 @@ from __future__ import annotations
 
 from typing import Any
 
+from .._resolution import SourceCard
+
 SOURCE_URLS = {
     "models_dev": "https://models.dev/api.json",
     "genai_prices": "https://raw.githubusercontent.com/pydantic/genai-prices/main/prices/data.json",
     "litellm": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
     "openrouter": "https://openrouter.ai/api/v1/models",
+}
+
+# Each source's standing for the resolution ladder (see _resolution.py).
+# registry_rank is the declared strict total order, the ladder's
+# determinism floor; it carries the previous preference order forward as
+# data. upstreams stays None (undeclared) until each source's origin
+# graph is verified, which keeps the corroboration rung inert rather
+# than letting shared upstreams vote twice; wrongness stays None until
+# the origin-check contradiction ledger exists. OpenRouter's API is
+# first-party for OpenRouter's own resale rows, the one origin pairing
+# in today's fusion.
+SOURCE_CARDS: dict[str, SourceCard] = {
+    "models_dev": SourceCard(name="models_dev", registry_rank=0),
+    "litellm": SourceCard(name="litellm", registry_rank=1),
+    "genai_prices": SourceCard(name="genai_prices", registry_rank=2),
+    "openrouter": SourceCard(
+        name="openrouter", registry_rank=3, origin_providers=("openrouter",)
+    ),
 }
 
 # models.dev cost keys -> ERD price units, all $/mtok already.
@@ -208,7 +228,12 @@ def normalize_litellm(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
             continue
         model_id = entry_key.split("/", 1)[1] if "/" in entry_key else entry_key
         price = {
-            unit: m[src] * _MTOK
+            # round() undoes the binary-float artifact of our own unit
+            # conversion (2e-07/token times 1e6 multiplies to
+            # 0.19999999999999998; the source's decimal intent is 0.2).
+            # Ten places is far below any published per-mtok precision,
+            # so no carried value changes, only the artifact goes.
+            unit: round(m[src] * _MTOK, 10)
             for src, unit in _LITELLM_MTOK_UNITS.items()
             if isinstance(m.get(src), (int, float))
         }

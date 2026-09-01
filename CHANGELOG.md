@@ -6,7 +6,7 @@ First functional release.
 
 ### Added
 
-- The AI pricing domain: ~7,000 models (2026-08-30 snapshot) fused from four sources (models.dev preferred; genai-prices, LiteLLM, and OpenRouter filling and cross-validating), with per-record source attribution and price disagreements past 2% stored on the record.
+- The AI pricing domain: ~7,000 models (2026-09-01 snapshot) fused from four sources (models.dev preferred; genai-prices, LiteLLM, and OpenRouter filling and cross-validating), with per-record source attribution and price disagreements past 2% stored on the record.
 - Three access tiers, picked by one `fetch` parameter: a bundled offline snapshot (`rates.ai.load()`, the default), a cheap published-ledger check (`load(fetch="stable")`), and a full independent fusion of the raw sources (`load(fetch="live")`), all returning the same `Registry`.
 - The query API: `Registry.filter()` with case-insensitive exact matching, explicit `*_contains` substring matching, and unit-explicit price bounds; `sort_by()` with a required direction; `price_units()`; `Model.price_for()` resolving tiered prices; `Model.to_dict()` emitting ledger-shaped JSON.
 - The schema: flat per-unit prices (never blended), price tiers with open-shaped conditions, three reasoning control forms (`effort`, `budget_tokens`, `toggle`), split context limits, and lifecycle with deprecation dates.
@@ -20,6 +20,7 @@ First functional release.
 - The zsh completion script works both ways: sourced from `.zshrc` or dropped into an `$fpath` directory as `_rates` and autoloaded (a `#compdef` tag plus a sourced-vs-autoloaded guard). USAGE documents install and uninstall for every shell, and that wiring it up is opt-in and a persistent change to shell startup.
 - Faster startup and tab completion: traceact is imported on the first traced call rather than at import, completion is dispatched before tracing is set up, and the completion path no longer imports a domain to find its cache or stat a bundled file. `rates --version` roughly halved; a warm completion no longer imports the AI domain or traceact at all.
 - `Model.alias`: whether a record's own `id` is a rolling reference (`gemini-pro-latest`) rather than a dated snapshot, per KeyCall's per-provider convention catalog. Baked into the ledger at build time only; the installed package stays zero-dependency, and `fetch="live"` carries no `alias` field.
+- The resolution ladder: a contested price unit resolves once across all its carriers (origin sources first, then freshness, corroboration, pinned overrides, measured accuracy, coverage, and a strict declared order that can never tie), every discrepancy note names the value that shipped, and `resolved_by` names the deciding rung. The envelope's `resolution` object carries the ladder and each source's scorecard, so any record's resolution is replayable from the ledger file alone.
 
 Full manual: [USAGE.md](https://github.com/shehuphd/rates/blob/main/USAGE.md)
 

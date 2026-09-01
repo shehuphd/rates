@@ -270,13 +270,16 @@ def test_agreement_produces_no_discrepancy(fused):
     assert _model(fused, "claude-opus-5")["price_discrepancies"] == []
 
 
-def test_disagreement_past_threshold_is_recorded_and_preference_still_wins(fused):
+def test_disagreement_past_threshold_is_recorded_and_the_ladder_decides(fused):
+    # No freshness data was supplied, so the freshness rung can't rank
+    # and the tie falls to the first measured rung below: coverage
+    # (models_dev carries more of this fixture's records than genai).
     claude2 = _model(fused, "claude-2")
     assert claude2["price"]["input_mtok"] == 8
     (d,) = claude2["price_discrepancies"]
     assert d["chosen_value"] == 8
     assert d["other_value"] == 4
-    assert d["resolved_by"] == "preference"
+    assert d["resolved_by"] == "coverage"
     assert d["difference_pct"] == 50.0
 
 
@@ -309,36 +312,40 @@ def test_freshness_keeps_the_preferred_source_when_it_changed_more_recently():
     assert d["resolved_by"] == "freshness"
 
 
-def test_freshness_tie_falls_back_to_preference():
+def test_freshness_tie_falls_through_to_coverage():
     same = date(2026, 1, 1)
     fused = fuse(
         _payloads(),
-        source_freshness={"genai_prices": same},
+        source_freshness={"genai_prices": same, "litellm": same},
         record_freshness=lambda provider, model_id: same,
     )
     (d,) = _model(fused, "claude-2")["price_discrepancies"]
-    assert d["resolved_by"] == "preference"
+    assert d["resolved_by"] == "coverage"
     assert d["chosen_source"] == "models_dev"
 
 
-def test_freshness_missing_the_preferred_dated_lookup_falls_back_to_preference():
+def test_freshness_missing_the_preferred_dated_lookup_skips_the_rung():
+    # One unmeasured candidate makes the whole freshness rung skip:
+    # a fresher-dated fallback must not win against a source whose
+    # freshness simply couldn't be checked (unknown is never stale).
     fused = fuse(
         _payloads(),
         source_freshness={"genai_prices": date(2026, 6, 1)},
         record_freshness=lambda provider, model_id: None,
     )
     (d,) = _model(fused, "claude-2")["price_discrepancies"]
-    assert d["resolved_by"] == "preference"
+    assert d["resolved_by"] == "coverage"
+    assert d["chosen_source"] == "models_dev"
 
 
-def test_freshness_missing_the_fallback_source_date_falls_back_to_preference():
+def test_freshness_missing_the_fallback_source_date_skips_the_rung():
     fused = fuse(
         _payloads(),
         source_freshness={},
         record_freshness=lambda provider, model_id: date(2026, 6, 1),
     )
     (d,) = _model(fused, "claude-2")["price_discrepancies"]
-    assert d["resolved_by"] == "preference"
+    assert d["resolved_by"] == "coverage"
 
 
 def test_context_gap_filled_from_genai_prices(fused):
@@ -717,7 +724,53 @@ def test_everything_down_raises_all_sources_unreachable(monkeypatch):
         fetch_sources()
 
 
-def test_litellm_price_disagreement_is_recorded_and_preference_wins():
+def test_three_way_disagreement_notes_all_point_at_the_shipped_value():
+    # The deepseek regression (2026-08-31): with the old pairwise
+    # resolution, two fallbacks each played models_dev independently, the
+    # later winner overwrote the earlier one's price, and the earlier
+    # note kept claiming a chosen_value that never shipped. Three sources
+    # disagree here (models_dev 8, genai 4, litellm 6, litellm freshest);
+    # every note must carry the one value on the label.
+    litellm = dict(LITELLM)
+    litellm["claude-2"] = {
+        "litellm_provider": "anthropic",
+        "mode": "chat",
+        "input_cost_per_token": 6e-06,
+    }
+    fused = fuse(
+        _payloads(litellm=litellm),
+        source_freshness={
+            "litellm": date(2026, 6, 1),
+            "genai_prices": date(2026, 3, 1),
+        },
+        record_freshness=lambda provider, model_id: date(2026, 1, 1),
+    )
+    claude2 = _model(fused, "claude-2")
+    assert claude2["price"]["input_mtok"] == pytest.approx(6.0)
+    notes = claude2["price_discrepancies"]
+    assert len(notes) == 2
+    assert {n["other_source"] for n in notes} == {"models_dev", "genai_prices"}
+    for n in notes:
+        assert n["chosen_source"] == "litellm"
+        assert n["chosen_value"] == pytest.approx(6.0)  # what shipped, in every note
+        assert n["resolved_by"] == "freshness"
+
+
+def test_envelope_carries_the_resolution_machinery(fused):
+    resolution = fused["resolution"]
+    assert resolution["ladder"][0] == "origin"
+    assert resolution["ladder"][-1] == "registry_order"
+    cards = resolution["sources"]
+    assert cards["openrouter"]["origin_providers"] == ["openrouter"]
+    ranks = [cards[name]["registry_rank"] for name in cards]
+    assert len(ranks) == len(set(ranks))  # a strict total order, no shared rank
+    for card in cards.values():
+        assert card["upstreams"] is None  # undeclared, never guessed
+        assert card["wrongness"] is None  # unmeasured, never zero
+        assert 0.0 <= card["coverage"] <= 1.0
+
+
+def test_litellm_price_disagreement_is_recorded_and_the_ladder_decides():
     litellm = dict(LITELLM)
     litellm["claude-opus-5"] = {
         **LITELLM["claude-opus-5"],
@@ -733,4 +786,4 @@ def test_litellm_price_disagreement_is_recorded_and_preference_wins():
     assert d["field"] == "input_mtok"
     assert d["other_value"] == pytest.approx(6.0)
     assert d["chosen_source"] == "models_dev"
-    assert d["resolved_by"] == "preference"
+    assert d["resolved_by"] == "coverage"

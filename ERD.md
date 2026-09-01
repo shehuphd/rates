@@ -53,7 +53,7 @@ erDiagram
         decimal chosen_value
         string other_source
         decimal other_value
-        string resolved_by "freshness | preference"
+        string resolved_by "the deciding ladder rung"
         decimal difference_pct
     }
     PRICE_TIER {
@@ -91,6 +91,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `domain` | string | `"ai"` for this domain |
 | `snapshot_date` | date | The daily snapshot's calendar identity: the value a `stable` check compares to find a newer release, and the date in its `ledger-YYYY-MM-DD` tag. A date, not an instant, because the AI ledger publishes once a day; a continuously-updated domain defines its own envelope. This, not a per-model timestamp, is how "did this change" gets answered for AI, by diffing two dated releases |
 | `sources` | `SOURCE[]` | Every upstream source consulted for this release, with its role and `status`. Each carries `fetched_at`, the UTC instant it was reached. On a `ledger` release every source is expected `ok`; on a `live` call, `status` is how a caller sees that a source was skipped for being unreachable rather than silently missing |
+| `resolution` | object | The resolution machinery this build was decided with: `ladder` (the rung order) and per-source scorecards (`registry_rank`, `origin_providers`, `upstreams`, `wrongness`, `coverage`, and any `override` with its `override_reason`). Ships in the envelope so any record's `resolved_by` is replayable and auditable from the ledger file alone. Unmeasured evidence is `null`, never a guessed zero |
 
 ## `MODEL`
 
@@ -107,7 +108,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `price` | `PRICE_ENTRY[]` | models.dev, gaps filled from LiteLLM/genai-prices | See below |
 | `price_discrepancies` | `PRICE_DISCREPANCY[]` | Computed during fusion | Empty when sources agree, not `null`. See below |
 | `reasoning` | `REASONING` \| null | models.dev, cross-checked against OpenRouter | Absent, not empty, when the model has no reasoning capability |
-| `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-08-23", "litellm": "2026-08-23"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
+| `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-01", "litellm": "2026-09-01"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
 | `lifecycle` | `LIFECYCLE` | models.dev (`status`, `release_date`) + LiteLLM (`deprecation_date`) | See below |
 | `observed_at` | datetime \| absent | Not supplied for AI | A UTC instant recording when this record's underlying value was observed upstream. Absent in the AI domain: list prices are announced, not observed to the second, and no source dates a price that finely. It exists on the record so a domain whose values move continuously (a market price) fills a stricter value into a field already present, rather than a later domain forcing a breaking change to add it. Distinct from the envelope's `snapshot_date` (a release's calendar identity) and from a source's `fetched_at` (when we reached the source): this is when the *value* was true |
 | `alias` | `ALIAS` \| absent | KeyCall's per-provider alias-convention catalog, baked in at ledger-build time | Absent for a dated/pinned id, or a provider with no recorded convention. See below |
@@ -153,34 +154,47 @@ Covers all three upstream forms: models.dev's `tiers` list, its `context_over_20
 
 ## `PRICE_DISCREPANCY`
 
-When sources disagree on a price, which value ships in `price` is decided by freshness first (whichever source's underlying data changed more recently for this record wins), falling back to a plain, editable per-field preference order when freshness can't decide. See ARCHITECTURE.md § Resolving price disagreements for the mechanism. The disagreement itself is stored either way, not discarded: checked directly across genai-prices and models.dev on 355 model records where both describe the same provider and the same model, 93 (26%) disagreed by more than 1% on input price. Silently dropping that would hide a verifiable fact, especially since the majority of reads against `rates` hit a static `ledger` file, generated once by a fusion run nobody watching the pipeline that week ever revisits, a warning at fusion time would never reach that reader. Stored on the record instead, it travels with the data.
+When sources disagree on a price, which value ships in `price` is decided by the resolution ladder (see ARCHITECTURE.md § Resolving price disagreements): origin sources end the contest for their own providers' rows, freshness ranks the witnesses, and the rungs below separate ties, down to a strict declared order that can never tie. A contested unit resolves once, across all its carriers together, and then writes one note per carrier still past the threshold from the shipped value: **every note's `chosen_source`/`chosen_value` is the value on the label**, however many sources disagreed, so a three-way disagreement yields two notes both naming the same shipped value.
+
+The disagreement itself is stored, not discarded: checked directly across genai-prices and models.dev on 355 model records where both describe the same provider and the same model, 93 (26%) disagreed by more than 1% on input price. Silently dropping that would hide a verifiable fact, especially since the majority of reads against `rates` hit a static `ledger` file, generated once by a fusion run nobody watching the pipeline that week ever revisits, a warning at fusion time would never reach that reader. Stored on the record instead, it travels with the data.
 
 Concentrated, not random: of those 93 disagreements, 89 were on OpenRouter or open-weight community models (`qwen`, `deepseek`, `phi-4`, `mistral-small`). First-party stable APIs (Anthropic, Google, OpenAI called direct) showed zero disagreement in the same sample. Mostly staleness skew between two sources' fetch times on volatile, aggregator-routed pricing, not a dispute about a fixed fact.
 
-**Threshold: 2%**, grounded in that same check, clean agreement clustered at ≤1%, substantive disagreement started around 3-4% and climbed fast (many past 50%). 2% clears rounding/currency-conversion noise without missing substantive cases.
+**Threshold: 2%**, grounded in that same check, clean agreement clustered at ≤1%, substantive disagreement started around 3-4% and climbed fast (many past 50%). 2% clears rounding/currency-conversion noise without missing substantive cases. A unit whose carriers all fall within the threshold of the registry-first carrier's value ships that value silently, with no notes.
 
 | Field | Type | Notes |
 |---|---|---|
 | `field` | string | Which price unit disagreed, e.g. `"input_mtok"` |
 | `chosen_source` | string | Which source's value shipped in `price` |
-| `chosen_value` | decimal | The value in `price`, i.e. what a caller gets |
+| `chosen_value` | decimal | The value in `price`, i.e. what a caller gets; identical across every note for the same unit |
 | `other_source` | string | Which source disagreed |
 | `other_value` | decimal | What that source reported instead |
-| `resolved_by` | string | `"freshness"` (the chosen source's data changed more recently) or `"preference"` (freshness couldn't decide; the per-field preference order settled it) |
+| `resolved_by` | string | The ladder rung that decided the unit: `"origin"`, `"freshness"`, `"corroboration"`, `"preferred"`, `"accuracy"`, `"coverage"`, or `"registry_order"`; identical across every note for the same unit |
 | `difference_pct` | decimal | `abs(chosen - other) / max(abs(chosen), abs(other)) * 100` |
 
-A live example, `deepseek/deepseek-chat-v3.1` on OpenRouter:
+A live example, `deepseek/deepseek-chat-v3.1` on OpenRouter, where litellm's fresher data beat both other carriers; the second note for the same unit names the same shipped value:
 
 ```json
-{
-  "field": "input_mtok",
-  "chosen_source": "models_dev",
-  "chosen_value": 0.55,
-  "other_source": "genai_prices",
-  "other_value": 0.21,
-  "resolved_by": "preference",
-  "difference_pct": 61.8
-}
+[
+  {
+    "field": "input_mtok",
+    "chosen_source": "litellm",
+    "chosen_value": 0.2,
+    "other_source": "models_dev",
+    "other_value": 0.55,
+    "resolved_by": "freshness",
+    "difference_pct": 63.6
+  },
+  {
+    "field": "input_mtok",
+    "chosen_source": "litellm",
+    "chosen_value": 0.2,
+    "other_source": "genai_prices",
+    "other_value": 0.21,
+    "resolved_by": "freshness",
+    "difference_pct": 4.8
+  }
+]
 ```
 
 ## `REASONING`
@@ -252,7 +266,7 @@ The one axis flagged as most important to get right: knowing whether a model is 
 
 ## Worked example
 
-The shipped record for `claude-opus-5` (ledger snapshot 2026-08-23):
+The shipped record for `claude-opus-5` (ledger snapshot 2026-09-01):
 
 ```json
 {
@@ -290,26 +304,35 @@ The shipped record for `claude-opus-5` (ledger snapshot 2026-08-23):
   "tool_call": true,
   "structured_output": true,
   "lifecycle": { "status": "active", "release_date": "2026-07-24", "deprecation_date": "2027-07-24" },
-  "sources": { "litellm": "2026-08-23", "models_dev": "2026-08-23", "openrouter": "2026-08-23" }
+  "sources": { "litellm": "2026-09-01", "models_dev": "2026-09-01", "openrouter": "2026-09-01" }
 }
 ```
 
-`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. `deepseek/deepseek-chat-v3.1` on OpenRouter is the case where they don't (same snapshot; the record carries three disagreements, one shown here):
+`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. `deepseek/deepseek-chat-v3.1` on OpenRouter is the case where they don't (same snapshot; the record carries four notes, the two for `input_mtok` shown here, both naming the value that shipped):
 
 ```json
 {
   "provider": "openrouter",
   "id": "deepseek/deepseek-chat-v3.1",
-  "price": { "currency": "USD", "input_mtok": 0.55, "output_mtok": 1.65, "cache_read_mtok": 0.55 },
+  "price": { "currency": "USD", "input_mtok": 0.2, "output_mtok": 0.8, "cache_read_mtok": 0.55 },
   "price_discrepancies": [
     {
       "field": "input_mtok",
-      "chosen_source": "models_dev",
-      "chosen_value": 0.55,
+      "chosen_source": "litellm",
+      "chosen_value": 0.2,
+      "other_source": "models_dev",
+      "other_value": 0.55,
+      "resolved_by": "freshness",
+      "difference_pct": 63.6
+    },
+    {
+      "field": "input_mtok",
+      "chosen_source": "litellm",
+      "chosen_value": 0.2,
       "other_source": "genai_prices",
       "other_value": 0.21,
-      "resolved_by": "preference",
-      "difference_pct": 61.8
+      "resolved_by": "freshness",
+      "difference_pct": 4.8
     }
   ]
 }
