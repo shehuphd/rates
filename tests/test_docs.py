@@ -88,10 +88,10 @@ def test_notice_covers_every_upstream_source():
 
 
 def test_changelog_model_count_and_date_match_bundled_ledger():
-    # The v1.0.0 line quotes an approximate model count and the snapshot
-    # date; both drift every time the ledger rebuilds. Read the shipped
-    # ledger and assert the line still agrees, so a stale figure fails the
-    # build instead of reaching a reader.
+    # The latest release's line quotes an approximate model count and the
+    # snapshot date; both drift every time the ledger rebuilds. Read the
+    # shipped ledger and assert the line still agrees, so a stale figure
+    # fails the build instead of reaching a reader.
     import gzip
     import json
 
@@ -104,6 +104,6 @@ def test_changelog_model_count_and_date_match_bundled_ledger():
 
     changelog = (ROOT / "CHANGELOG.md").read_text()
     assert expected in changelog, (
-        f"CHANGELOG's v1.0.0 line is stale against the bundled ledger; "
+        f"CHANGELOG's latest-release line is stale against the bundled ledger; "
         f"expected {expected!r}"
     )
