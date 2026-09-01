@@ -1,8 +1,8 @@
 # Changelog
 
-## v1.0.0 (unreleased)
+## v0.0.4 (2026-09-01)
 
-First functional release.
+First functional release, shipped under a pre-1.0 version number so the PyPI publishing pipeline (branch protection, the GitHub Release trigger, the trusted-publisher OIDC flow) proves out on a disposable version before v1.0.0 claims it.
 
 ### Added
 

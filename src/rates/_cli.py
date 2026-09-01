@@ -322,6 +322,16 @@ def _value_choices(action: argparse.Action | None) -> str | None:
     return None
 
 
+def _split_choices(raw: str) -> list[str]:
+    """Parse argparse's own comma-joined choice list out of its invalid
+    choice message. Python 3.12 dropped the quotes each choice used to
+    be wrapped in ('a', 'b' -> a, b), so split on the separator and
+    strip any quotes still present rather than requiring them."""
+    import re
+
+    return [c.strip().strip("'\"") for c in re.split(r",\s*", raw) if c.strip()]
+
+
 def _humanize(message: str, parser: argparse.ArgumentParser) -> tuple[str, str | None]:
     """argparse's own error text is terse and technical, built for a
     parser library's internal use, not a human reading it once. This
@@ -339,7 +349,7 @@ def _humanize(message: str, parser: argparse.ArgumentParser) -> tuple[str, str |
     )
     if choice:
         option, bad, raw_choices = choice.groups()
-        choices = ", ".join(re.findall(r"'([^']+)'", raw_choices))
+        choices = ", ".join(_split_choices(raw_choices))
         subject = "a command" if option == "verb" else option
         sentence = f"{bad!r} isn't valid for {subject}, choose from: {choices}"
         if option == "--fetch":
@@ -392,7 +402,7 @@ def _typo_hint(message: str, prog: str, known_flags: list[str]) -> str | None:
 
     choice = re.search(r"invalid choice: '([^']+)' \(choose from (.+)\)", message)
     if choice:
-        candidates = re.findall(r"'([^']+)'", choice.group(2))
+        candidates = _split_choices(choice.group(2))
         if prog == "rates":
             candidates += list(DOMAINS)
         close = difflib.get_close_matches(choice.group(1), candidates, n=1, cutoff=0.5)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rates"
-version = "1.0.0"
+version = "0.0.4"
 description = "A pricing registry and decision layer. AI model pricing, capabilities, and lifecycle."
 readme = "README.md"
 requires-python = ">=3.10"
