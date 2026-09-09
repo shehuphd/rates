@@ -5,18 +5,18 @@ name: release gate
 # auto-skips when no AUDIT_API_KEY is set, so this gate runs (deterministic
 # only) with no secrets configured.
 #
-# AUDIT_API_KEY and AUDIT_FALLBACK_API_KEY are each a single "provider/key"
-# string (e.g. "anthropic/sk-ant-...", "openai/sk-...", "google/..."), and
-# either can name any provider. The provider prefix drives two lookups:
+# AUDIT_API_KEY and AUDIT_FALLBACK_API_KEY are each a single "<provider>/<key>"
+# string, and either can name any provider. The provider prefix drives two
+# lookups:
 #   - the agent CLI that runs the call, resolved inside the reusable gate;
 #   - the audit model, which is named differently per provider, so it can't
 #     be one fixed input.
 # The select-model job below is the model adapter: for each supplied key it
-# reads the provider and looks up its model in the AUDIT_MODEL_<PROVIDER>
-# repo variable (uppercased provider), with no hardcoded provider list. Set
-# AUDIT_MODEL_ANTHROPIC / AUDIT_MODEL_OPENAI / AUDIT_MODEL_<PROVIDER> to the
-# model in that provider's own naming. A key whose provider the reusable
-# gate has no agent CLI for is reported there, not guessed at here.
+# reads whatever provider is given and looks up its model in the repo
+# variable AUDIT_MODEL_<PROVIDER> (uppercased provider). No provider is
+# named or assumed here; adding one is a repo-variable entry, not an edit.
+# A key whose provider the reusable gate has no agent CLI for is reported
+# there, not guessed at here.
 
 # Manual for now, matching ci.yml, while the account's Actions minutes are
 # limited. Enable pull_request to gate every merge once they're available:
@@ -45,10 +45,10 @@ jobs:
           VARS_JSON: ${{ toJSON(vars) }}
         run: |
           set -euo pipefail
-          # "provider/key" -> its audit model, or "" when the key is unset.
-          # The key itself is never printed; GitHub masks it. Any provider
-          # works: the model comes from AUDIT_MODEL_<PROVIDER>, so adding a
-          # provider is a repo-variable entry, not a change here.
+          # "<provider>/<key>" -> its audit model, or "" when the key is
+          # unset. The key itself is never printed; GitHub masks it. Any
+          # provider works: the model comes from AUDIT_MODEL_<PROVIDER>, so
+          # adding a provider is a repo-variable entry, not a change here.
           model_for() {  # $1 key, $2 secret-name-for-messages
             key="$1"
             label="$2"
@@ -57,7 +57,7 @@ jobs:
               return 0
             fi
             if [ "${key%%/*}" = "$key" ]; then
-              echo "::error::$label must be 'provider/key', e.g. anthropic/sk-ant-... or openai/sk-..." >&2
+              echo "::error::$label must be '<provider>/<key>'" >&2
               return 1
             fi
             provider="$(printf '%s' "${key%%/*}" | tr '[:upper:]' '[:lower:]')"
