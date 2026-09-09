@@ -6,8 +6,8 @@ identity and nothing changes. rates never imports it as a requirement,
 never configures sinks (that's the consuming app's decision), and never
 fails because tracing is unavailable.
 
-Verified against traceact 1.0.0's public API (traced_action) on
-2026-08-23.
+Verified against traceact 1.5.0's public API (traced_action,
+JsonlSink, configure, get_package_sinks) on 2026-09-09.
 """
 
 from __future__ import annotations
