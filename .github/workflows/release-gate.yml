@@ -1,0 +1,75 @@
+name: release gate
+
+# The docs-vs-code release gate: shiplock's deterministic checks plus its
+# optional semantic audit, via shiplock's reusable workflow. The audit
+# auto-skips when no AUDIT_API_KEY is set, so this gate runs (deterministic
+# only) with no secrets configured.
+#
+# AUDIT_API_KEY is a single "provider/key" string, e.g. "anthropic/sk-ant-..."
+# or "openai/sk-...". The provider prefix picks both the agent CLI (the
+# reusable gate maps anthropic -> claude, openai -> codex) and the audit
+# model, which is named differently per provider and so can't be one fixed
+# input. The select-model job below reads the provider and routes the model:
+# anthropic defaults to the "sonnet" CLI alias; openai (which has no such
+# stable alias) takes its model from the AUDIT_MODEL_OPENAI repo variable.
+# Override the anthropic default with AUDIT_MODEL_ANTHROPIC.
+
+# Manual for now, matching ci.yml, while the account's Actions minutes are
+# limited. Enable pull_request to gate every merge once they're available:
+#   pull_request:
+#     branches: [main]
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  select-model:
+    name: Route the audit model by provider
+    runs-on: ubuntu-latest
+    outputs:
+      model: ${{ steps.pick.outputs.model }}
+    steps:
+      - id: pick
+        env:
+          AUDIT_KEY: ${{ secrets.AUDIT_API_KEY }}
+          MODEL_ANTHROPIC: ${{ vars.AUDIT_MODEL_ANTHROPIC }}
+          MODEL_OPENAI: ${{ vars.AUDIT_MODEL_OPENAI }}
+        run: |
+          set -euo pipefail
+          key="${AUDIT_KEY:-}"
+          if [ -z "$key" ]; then
+            # No key: leave the model empty. The reusable gate sees no
+            # AUDIT_API_KEY and skips the audit, so only the deterministic
+            # checks gate the run.
+            echo "model=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # "provider/key" -> provider is the text before the first slash,
+          # lowercased. The key itself is never printed; GitHub masks it.
+          provider="$(printf '%s' "${key%%/*}" | tr '[:upper:]' '[:lower:]')"
+          case "$provider" in
+            anthropic) model="${MODEL_ANTHROPIC:-sonnet}" ;;
+            openai)    model="${MODEL_OPENAI:-}" ;;
+            *)
+              echo "::error::AUDIT_API_KEY names provider '$provider'; the gate handles anthropic and openai" >&2
+              exit 1
+              ;;
+          esac
+          if [ -z "$model" ]; then
+            echo "::error::set the audit model for provider '$provider' in a repo variable (AUDIT_MODEL_OPENAI / AUDIT_MODEL_ANTHROPIC), in that provider's own model naming" >&2
+            exit 1
+          fi
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+
+  gate:
+    needs: select-model
+    uses: shehuphd/shiplock/.github/workflows/gate.yml@main
+    with:
+      shiplock-spec: "shiplock>=0.3.1"
+      run-audit: true
+      audit-model: ${{ needs.select-model.outputs.model }}
+      audit-fallback-model: ${{ vars.AUDIT_FALLBACK_MODEL }}
+    secrets:
+      AUDIT_API_KEY: ${{ secrets.AUDIT_API_KEY }}
+      AUDIT_FALLBACK_API_KEY: ${{ secrets.AUDIT_FALLBACK_API_KEY }}

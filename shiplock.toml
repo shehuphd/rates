@@ -1,0 +1,39 @@
+# Shiplock config: docs-vs-code release checks, deterministic and
+# agent-audited (semantic and ablation prompts included).
+# Install: pip install shiplock. Docs: https://github.com/shehuphd/shiplock
+
+[docs]
+public = ["README.md", "USAGE.md", "ARCHITECTURE.md", "ERD.md", "CHANGELOG.md"]
+changelog = "CHANGELOG.md"
+readme = "README.md"
+
+[style]
+source_globs = ["src/**/*.py", "scripts/*.py"]
+
+[version]
+package = "rates"
+
+[architecture]
+doc = "ARCHITECTURE.md"
+source_dir = "src/rates"
+exempt = ["__init__", "__main__"]
+
+# rates keeps no per-file manifest; silence the reminder rather than
+# leave a notice on every run.
+[manifest]
+remind = false
+
+[[coverage]]
+object = "rates"
+doc = "USAGE.md"
+kind = "exports"
+exempt = ["__version__"]
+
+[deps]
+# rates declares its (empty) dependency set in pyproject.toml alone; the
+# glob stands ready to catch a requirements file appearing with a
+# duplicate declaration.
+requirements = ["requirements*.txt"]
+
+[tests]
+globs = ["tests/**/*.py"]
