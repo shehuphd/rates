@@ -1,6 +1,6 @@
 # rates
 
-A pricing registry and decision layer. One domain ships today: AI API rates, per-unit prices, capabilities, and lifecycle for 6,000+ models.
+A pricing registry and decision layer. One domain ships today: AI API rates, per-unit prices, capabilities, and lifecycle for 7,000+ models.
 
 ## Before you start
 

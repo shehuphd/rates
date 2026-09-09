@@ -169,9 +169,9 @@ rates ai info
 ```
 domain: ai
   schema version: 1.0.0
-  snapshot: 2026-08-23 (1 day old)
-  models: 6889
-  providers: 184
+  snapshot: 2026-09-01 (1 day old)
+  models: 7109
+  providers: 202
   type known: 3897 of 7109 (untyped models never match --type)
   sources: ok (checked 2026-09-01)
   Note: Services with unpublished, inaccessible, or non-unit pricing (subscriptions, platform bundles) aren't listed.
