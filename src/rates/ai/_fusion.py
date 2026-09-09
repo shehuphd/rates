@@ -18,7 +18,7 @@ contested unit runs the resolution ladder (``rates._resolution``) over
 every carrier, ships the winner's value, and records every carrier
 still past the threshold from the shipped value as a
 ``price_discrepancies`` note, ``resolved_by`` naming the rung that
-decided. OpenRouter fills modality gaps and carries no prices.
+decided. OpenRouter fills missing modalities and carries no prices.
 """
 
 from __future__ import annotations

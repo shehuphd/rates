@@ -105,7 +105,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `context.input` / `.output` | int \| null | models.dev | Split, since input and output limits often differ |
 | `tool_call` | bool \| absent | models.dev | Absent means unknown, never `false`; a filter on it matches neither way |
 | `structured_output` | bool \| absent | models.dev | Same tri-state rule as `tool_call` |
-| `price` | `PRICE_ENTRY[]` | models.dev, gaps filled from LiteLLM/genai-prices | See below |
+| `price` | `PRICE_ENTRY[]` | models.dev, the rest filled from LiteLLM/genai-prices | See below |
 | `price_discrepancies` | `PRICE_DISCREPANCY[]` | Computed during fusion | Empty when sources agree, not `null`. See below |
 | `reasoning` | `REASONING` \| null | models.dev, cross-checked against OpenRouter | Absent, not empty, when the model has no reasoning capability |
 | `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-01", "litellm": "2026-09-01"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
