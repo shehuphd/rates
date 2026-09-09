@@ -5,14 +5,18 @@ name: release gate
 # auto-skips when no AUDIT_API_KEY is set, so this gate runs (deterministic
 # only) with no secrets configured.
 #
-# AUDIT_API_KEY is a single "provider/key" string, e.g. "anthropic/sk-ant-..."
-# or "openai/sk-...". The provider prefix picks both the agent CLI (the
-# reusable gate maps anthropic -> claude, openai -> codex) and the audit
-# model, which is named differently per provider and so can't be one fixed
-# input. The select-model job below reads the provider and routes the model:
-# anthropic defaults to the "sonnet" CLI alias; openai (which has no such
-# stable alias) takes its model from the AUDIT_MODEL_OPENAI repo variable.
-# Override the anthropic default with AUDIT_MODEL_ANTHROPIC.
+# AUDIT_API_KEY and AUDIT_FALLBACK_API_KEY are each a single "provider/key"
+# string (e.g. "anthropic/sk-ant-...", "openai/sk-...", "google/..."), and
+# either can name any provider. The provider prefix drives two lookups:
+#   - the agent CLI that runs the call, resolved inside the reusable gate;
+#   - the audit model, which is named differently per provider, so it can't
+#     be one fixed input.
+# The select-model job below is the model adapter: for each supplied key it
+# reads the provider and looks up its model in the AUDIT_MODEL_<PROVIDER>
+# repo variable (uppercased provider), with no hardcoded provider list. Set
+# AUDIT_MODEL_ANTHROPIC / AUDIT_MODEL_OPENAI / AUDIT_MODEL_<PROVIDER> to the
+# model in that provider's own naming. A key whose provider the reusable
+# gate has no agent CLI for is reported there, not guessed at here.
 
 # Manual for now, matching ci.yml, while the account's Actions minutes are
 # limited. Enable pull_request to gate every merge once they're available:
@@ -29,38 +33,46 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       model: ${{ steps.pick.outputs.model }}
+      fallback-model: ${{ steps.pick.outputs.fallback-model }}
     steps:
       - id: pick
         env:
-          AUDIT_KEY: ${{ secrets.AUDIT_API_KEY }}
-          MODEL_ANTHROPIC: ${{ vars.AUDIT_MODEL_ANTHROPIC }}
-          MODEL_OPENAI: ${{ vars.AUDIT_MODEL_OPENAI }}
+          PRIMARY_KEY: ${{ secrets.AUDIT_API_KEY }}
+          FALLBACK_KEY: ${{ secrets.AUDIT_FALLBACK_API_KEY }}
+          # Every repo variable as one JSON object, so a variable named for
+          # the provider (AUDIT_MODEL_<PROVIDER>) can be looked up by a name
+          # computed at runtime rather than referenced statically.
+          VARS_JSON: ${{ toJSON(vars) }}
         run: |
           set -euo pipefail
-          key="${AUDIT_KEY:-}"
-          if [ -z "$key" ]; then
-            # No key: leave the model empty. The reusable gate sees no
-            # AUDIT_API_KEY and skips the audit, so only the deterministic
-            # checks gate the run.
-            echo "model=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # "provider/key" -> provider is the text before the first slash,
-          # lowercased. The key itself is never printed; GitHub masks it.
-          provider="$(printf '%s' "${key%%/*}" | tr '[:upper:]' '[:lower:]')"
-          case "$provider" in
-            anthropic) model="${MODEL_ANTHROPIC:-sonnet}" ;;
-            openai)    model="${MODEL_OPENAI:-}" ;;
-            *)
-              echo "::error::AUDIT_API_KEY names provider '$provider'; the gate handles anthropic and openai" >&2
-              exit 1
-              ;;
-          esac
-          if [ -z "$model" ]; then
-            echo "::error::set the audit model for provider '$provider' in a repo variable (AUDIT_MODEL_OPENAI / AUDIT_MODEL_ANTHROPIC), in that provider's own model naming" >&2
-            exit 1
-          fi
-          echo "model=$model" >> "$GITHUB_OUTPUT"
+          # "provider/key" -> its audit model, or "" when the key is unset.
+          # The key itself is never printed; GitHub masks it. Any provider
+          # works: the model comes from AUDIT_MODEL_<PROVIDER>, so adding a
+          # provider is a repo-variable entry, not a change here.
+          model_for() {  # $1 key, $2 secret-name-for-messages
+            key="$1"
+            label="$2"
+            if [ -z "$key" ]; then
+              printf ''
+              return 0
+            fi
+            if [ "${key%%/*}" = "$key" ]; then
+              echo "::error::$label must be 'provider/key', e.g. anthropic/sk-ant-... or openai/sk-..." >&2
+              return 1
+            fi
+            provider="$(printf '%s' "${key%%/*}" | tr '[:upper:]' '[:lower:]')"
+            var_name="AUDIT_MODEL_$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')"
+            model="$(printf '%s' "$VARS_JSON" | jq -r --arg k "$var_name" '.[$k] // ""')"
+            if [ -z "$model" ]; then
+              echo "::error::$label names provider '$provider'; set repo variable $var_name to the audit model in $provider's own naming" >&2
+              return 1
+            fi
+            printf '%s' "$model"
+          }
+          primary_model="$(model_for "${PRIMARY_KEY:-}" AUDIT_API_KEY)"
+          fallback_model="$(model_for "${FALLBACK_KEY:-}" AUDIT_FALLBACK_API_KEY)"
+          echo "model=$primary_model" >> "$GITHUB_OUTPUT"
+          echo "fallback-model=$fallback_model" >> "$GITHUB_OUTPUT"
 
   gate:
     needs: select-model
@@ -69,7 +81,7 @@ jobs:
       shiplock-spec: "shiplock>=0.3.1"
       run-audit: true
       audit-model: ${{ needs.select-model.outputs.model }}
-      audit-fallback-model: ${{ vars.AUDIT_FALLBACK_MODEL }}
+      audit-fallback-model: ${{ needs.select-model.outputs.fallback-model }}
     secrets:
       AUDIT_API_KEY: ${{ secrets.AUDIT_API_KEY }}
       AUDIT_FALLBACK_API_KEY: ${{ secrets.AUDIT_FALLBACK_API_KEY }}
