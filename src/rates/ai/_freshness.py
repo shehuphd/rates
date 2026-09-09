@@ -34,8 +34,8 @@ LOOKUP_TIMEOUT_SECONDS = 5.0
 # A hard ceiling on per-record models.dev lookups in one fusion run, so a
 # catalog with an unusually large disagreement count can't turn a single
 # live() call into hundreds of sequential network round trips. Past the
-# cap, remaining records fall straight to PRICE_PREFERENCE, same as any
-# other unreachable freshness check.
+# cap, remaining records skip the freshness rung, same as any other
+# unreachable freshness check, and the ladder decides below it.
 MAX_RECORD_LOOKUPS_PER_RUN = 200
 
 _USER_AGENT = "rates (+https://github.com/shehuphd/rates)"

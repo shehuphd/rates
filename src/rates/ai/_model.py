@@ -105,11 +105,12 @@ class PriceTier:
 class PriceDiscrepancy:
     """A recorded disagreement between two sources on one price unit.
 
-    ``chosen_source``/``chosen_value`` is what shipped in ``price``:
-    whichever source's underlying data changed more recently, or a fixed
-    preference order when freshness can't decide (see ARCHITECTURE.md §
-    Resolving price disagreements). ``resolved_by`` names which of the
-    two decided: ``"freshness"`` or ``"preference"``.
+    ``chosen_source``/``chosen_value`` is what shipped in ``price``: the
+    value the resolution ladder selected across every source reporting
+    this unit (see ARCHITECTURE.md § Resolving price disagreements).
+    ``resolved_by`` names the rung that decided, one of ``"origin"``,
+    ``"freshness"``, ``"corroboration"``, ``"preferred"``,
+    ``"accuracy"``, ``"coverage"``, or ``"registry_order"``.
     """
 
     field: str
