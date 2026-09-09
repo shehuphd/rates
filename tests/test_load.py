@@ -73,9 +73,10 @@ def test_stale_ledger_warns_with_next_steps(bundled):
 def test_ledger_at_the_threshold_does_not_warn(bundled):
     edge = (datetime.now(timezone.utc).date() - timedelta(days=28)).isoformat()
     bundled["data"] = {**FRESH, "snapshot_date": edge}
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         load()
+    assert caught == []
 
 
 # Live tier
@@ -192,9 +193,10 @@ def test_live_does_not_warn_when_every_source_is_reachable(
         {"models_dev": "ok", "genai_prices": "ok", "litellm": "ok",
          "openrouter": "ok"},
     )
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", SourceUnreachableWarning)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         load(fetch="live")  # a fully-healthy fusion stays quiet
+    assert not [w for w in caught if issubclass(w.category, SourceUnreachableWarning)]
 
 
 def test_a_warm_cache_does_not_re_warn(isolated_cache, monkeypatch):

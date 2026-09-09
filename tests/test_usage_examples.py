@@ -25,8 +25,9 @@ def test_warning_escalation_recipe():
 
     import rates
 
-    warnings.simplefilter("error", rates.StaleLedgerWarning)  # stale data becomes a hard failure
-    warnings.resetwarnings()  # not part of the recipe; keeps this test isolated
+    assert issubclass(rates.StaleLedgerWarning, Warning)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", rates.StaleLedgerWarning)  # stale data becomes a hard failure
 
 
 def test_querying_recipe(capsys):

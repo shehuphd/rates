@@ -256,9 +256,10 @@ def test_missing_snapshot_date_never_warns():
 
     from rates.ai._load import _warn_if_stale
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         _warn_if_stale(None)
+    assert caught == []
 
 
 # Fusion with hostile payloads
