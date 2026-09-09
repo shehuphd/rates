@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.0.4 (2026-09-01)
+## 0.0.4 (2026-09-01)
 
 First functional release, shipped under a pre-1.0 version number so the PyPI publishing pipeline (branch protection, the GitHub Release trigger, the trusted-publisher OIDC flow) proves out on a disposable version before v1.0.0 claims it.
 
@@ -31,6 +31,6 @@ First functional release, shipped under a pre-1.0 version number so the PyPI pub
 
 Full manual: [USAGE.md](https://github.com/shehuphd/rates/blob/main/USAGE.md)
 
-## v0.0.3 (2026-08-16)
+## 0.0.3 (2026-08-16)
 
 Name reservation on PyPI. No functionality.
