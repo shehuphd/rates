@@ -38,6 +38,22 @@ The core contract is an explicit `Record` protocol (`rates._record`) in neutral 
 
 Nothing in the AI domain's extension is part of the core; the boundary is enforced by the `Record` protocol and the domain registry, and in the CLI's vocabulary (see CLI shape below) as well as the schema.
 
+### Source layout
+
+The top-level modules under `src/rates`, and what each one owns:
+
+| Module | Owns |
+|---|---|
+| `_record` | The cross-domain `Record` protocol, in neutral vocabulary. |
+| `_domains` | The domain registry: what each domain is, how to load it, which tiers it supports, when its data goes stale. |
+| `_resolution` | The resolution ladder that decides a contested price and records who disagreed. |
+| `_cli` | The `rates` command-line surface: argument parsing, table and JSON rendering, tab completion, typo suggestions. |
+| `_cache` | The per-user cache directory under `~/.cache/rates`, created `0700`. |
+| `_http` | The stdlib HTTP helper: escalating timeouts, retry-on-transient, no dependency. |
+| `_errors` | The exception and warning taxonomy shared across domains. |
+| `_trace` | Optional traceact instrumentation; a no-op shim when traceact isn't installed. |
+| `ai/` | The AI domain extension: the four-source fusion, the model schema, the `Registry`, the three load tiers, and source freshness. |
+
 ## Why the AI domain fuses several sources instead of consuming one
 
 No single existing source covers what this domain needs:
@@ -47,10 +63,10 @@ No single existing source covers what this domain needs:
 | [genai-prices](https://github.com/pydantic/genai-prices) | Broadest provider and model-type coverage (36 providers, all model types including non-chat) | No type, modality, or reasoning fields at all |
 | [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) | Native `mode` field (model type), wide capability booleans, per-second video pricing | Reasoning-effort levels are sparse and inconsistently populated |
 | [OpenRouter](https://openrouter.ai/api/v1/models) | Ordered reasoning-effort vocabulary, modality arrays | Chat-completion models only, no embedding/image/audio/moderation coverage at all |
-| [models.dev](https://github.com/anomalyco/models.dev) | Richest single per-model schema (family, modalities, typed reasoning options, lifecycle status, split context/output limits) | No type/mode field; gaps in specific categories (no pricing at all for Veo video models as of this writing) |
+| [models.dev](https://github.com/anomalyco/models.dev) | Richest single per-model schema (family, modalities, typed reasoning options, lifecycle status, split context/output limits) | No type/mode field; whole categories missing (no pricing at all for Veo video models as of this writing) |
 | [Hugging Face Hub](https://huggingface.co/docs/hub/api) | Open-weight model task type and provenance | Not a pricing source; only useful for cross-referencing open-weight models |
 
-**models.dev is `rates`' preferred ingestion source**; genai-prices, LiteLLM, and OpenRouter fill gaps and cross-validate. "Preferred," not "authoritative": none of the four is the provider itself, so none of them gets to be treated as automatically right when they disagree, see § Resolving price disagreements below for what "preferred" governs. Hugging Face was evaluated for open-weight cross-referencing and isn't consumed; no open-weights field ships ([ERD.md](ERD.md) § Excluded fields). `rates` still exists as an independent project on top of this rather than simply re-exporting models.dev, for reasons distinct from data quality:
+**models.dev is `rates`' preferred ingestion source**; genai-prices, LiteLLM, and OpenRouter fill what it lacks and cross-validate. "Preferred," not "authoritative": none of the four is the provider itself, so none of them gets to be treated as automatically right when they disagree, see § Resolving price disagreements below for what "preferred" governs. Hugging Face was evaluated for open-weight cross-referencing and isn't consumed; no open-weights field ships ([ERD.md](ERD.md) § Excluded fields). `rates` still exists as an independent project on top of this rather than simply re-exporting models.dev, for reasons distinct from data quality:
 
 1. **Provenance.** models.dev's own update history is bot-synced from other catalogs roughly hourly (`opencode-agent[bot]`), not independently human-verified per field. `rates`' records each list the sources that contributed to them and when each was fetched, and [ERD.md](ERD.md) maps every field to the source that supplies it, so a caller can see where a value came from, not just what it is.
 2. **History.** models.dev serves only its latest snapshot. `rates` ships dated, versioned JSON releases, so "did this model's price change since March" is answerable by diffing two releases, not lost the moment the source overwrites its own data.
@@ -99,7 +115,7 @@ Rates are durable. Once a provider sets a price, it typically holds for a long w
 
 - **`bundled` (the default).** The best snapshot already on this machine: the dated, versioned JSON ledger shipped inside the installed package, or a newer one a prior `stable` fetch already downloaded and cached. Zero network calls, ever. This is what makes `rates` usable in an air-gapped environment with no configuration, `pip install rates` and it works.
 - **`stable` (a cheap freshness check).** No bespoke manifest file, GitHub's own Releases API already is one: each ledger publishes as a GitHub Release, so listing recent releases (`GET /repos/shehuphd/rates/releases`) and taking the newest one carrying a ledger asset answers "is there something newer" for free, nothing to hand-write or keep in sync during the publish step (the newest release overall can be a package release, so the check walks past those). If it matches what's already on hand, done, milliseconds. If it doesn't, only then is the newer published ledger's asset pulled down, still our own already-fused output, not a re-fetch of all four raw sources.
-- **`live` (opt-in, the heavy option).** The full fusion function (models.dev preferred, gaps filled from genai-prices/LiteLLM/OpenRouter, per-record source attribution), run by the caller's own process against the four raw sources directly, bypassing anything we've published. This is the exact same function we run ourselves to produce each ledger release, exposed as a public capability rather than kept as internal tooling, so nobody has to trust our merge logic without being able to run it themselves.
+- **`live` (opt-in, the heavy option).** The full fusion function (models.dev preferred, missing values filled from genai-prices/LiteLLM/OpenRouter, per-record source attribution), run by the caller's own process against the four raw sources directly, bypassing anything we've published. This is the exact same function we run ourselves to produce each ledger release, exposed as a public capability rather than kept as internal tooling, so nobody has to trust our merge logic without being able to run it themselves.
 
 `stable` and `live` are both strictly opt-in, never triggered implicitly. A caller who calls neither never causes `rates` to make an outbound request; for anyone in a restricted network (a defense environment, an air-gapped facility), that guarantee counts as much as the features themselves, and it holds even if they forget to check a setting.
 
@@ -227,6 +243,62 @@ Anthropic models with opus in the name, at most $5 per million input tokens, fir
 Completion is hand-rolled on the shell's own protocol, no dependency: `rates completion bash|zsh|fish|powershell` prints the few registration lines (PowerShell registers through `Register-ArgumentCompleter -Native`; cmd.exe has no argument-completion hook, so PowerShell is the Windows surface), and a hidden `rates __complete` prints candidates. Value positions complete from the data itself, `--provider <TAB>` lists the providers in the registry, `--price-unit <TAB>` the units, `show <TAB>` the model identities, the same data-driven principle as the error messages. Candidates come from a cache in the same per-user `~/.cache/rates` directory, keyed on the bundled ledger's file stat, so a repeat TAB costs roughly interpreter startup.
 
 Tracing is a soft dependency on [traceact](https://github.com/traceact/traceact): installed alongside `rates`, key operations (CLI runs, loads, live fusions) record traces; absent, a no-op shim stands in and nothing changes. The CLI routes traces to `~/.traceact/rates.jsonl` only when the surrounding app hasn't configured its own sinks; the Python API never touches tracing configuration at all.
+
+## STRuFO
+
+A one-page runtime story: the shape, the stack, one run end to end, how it breaks, and how it's observed.
+
+### Shape
+
+`rates` is a pricing registry: one zero-dependency Python package that answers what an AI model costs and can do, fused from four public sources into a single schema, served through a bundled snapshot, a freshness-checked fetch, or a live re-fusion, and queried through the same API and CLI regardless of which one answered.
+
+### Technical stack
+
+- **Language:** Python 3.10+ (tested through 3.14).
+- **Runtime dependencies:** none. Pure standard library:
+  - `argparse` for the CLI
+  - `urllib` for every HTTP call (no `requests`)
+  - `dataclasses` for the schema
+  - `gzip` / `json` for the bundled ledger format
+  - `importlib.resources` for reading the bundled ledger out of the wheel
+- **Build and release:** `hatchling` build backend; published to PyPI through a GitHub Release that triggers an OIDC trusted-publisher workflow, so no PyPI token is stored anywhere.
+- **Optional soft dependencies, invisible to a plain install:**
+  - `traceact` for tracing, lazily resolved: present or absent, the code path is identical.
+  - `keycall`, build-time only: consulted when the published ledger is built, never imported by the installed package.
+
+### Run details
+
+**Cocktail-party version.** Say you ask for a model's price. Instead of trusting one source and hoping it's right, `rates` asks four different public sources for the same number, at build time. Most of the time they agree and it ships the number. When they don't agree, there's a fixed pecking order for who gets believed: first, is one of them the model's own provider describing its own model, because that source wins outright; then, whoever updated their data most recently, because a stale source can't have seen a price change; then, do the independent sources corroborate each other; and so on down a fixed list, until one answer wins. Every source that disagreed is written down next to the answer, so you can see who lost the argument and why.
+
+**Technical version.** A read starts at either the CLI (`rates ai list`) or the Python API (`rates.ai.load()`). The domain registry (`_domains.py`) resolves `"ai"` to a `"module:attr"` loader string it imports lazily, so an unrelated command, tab completion above all, never pulls in the fusion machinery. `load(fetch=...)` picks one of three tiers, never a combination:
+
+- **`bundled`** (the default) reads the gzip-compressed ledger shipped inside the wheel via `importlib.resources`, compares its snapshot date against a previously cached `stable` fetch, keeps whichever is newer, and warns once that snapshot passes 28 days old. Zero network.
+- **`stable`** queries GitHub's Releases API for a ledger tagged newer than the local one, downloads and caches it on a hit, and on any failure (network, schema mismatch, no release yet) falls back to serving the local snapshot with a warning instead of raising.
+- **`live`** fetches all four sources over `urllib` with an escalating timeout ladder, degrading per source, normalizes each into `(provider, id)`-keyed dicts, and merges with models.dev as the ingestion spine.
+
+Every price unit resolves independently: if every source is within 2% of the registry-first value it ships silently; otherwise the resolution ladder (`_resolution.py`) runs origin status, then freshness, then independent corroboration, then a pinned override, then measured accuracy, then coverage, then a strict declared order that can never tie. The losing sources are written into the record as `price_discrepancies`, each naming the rung that decided. Whichever tier answered, the result is one `Registry` wrapping typed `Model` dataclasses with `.filter()`, `.sort_by()`, and `.price_for()`; the CLI renders that as a table or JSON.
+
+### Failure modes
+
+Typed, per cause. Every stop records why, not just that it stopped.
+
+| Failure | Where | How it's handled |
+|---|---|---|
+| A non-preferred source unreachable | `fetch="live"` | Ships anyway; `SourceUnreachableWarning` names the missing source and the fields it would have enriched |
+| Preferred source (models.dev) unreachable | `fetch="live"` | Raises `PreferredSourceUnavailableError`; no honest result without the spine |
+| Every source unreachable | `fetch="live"` | Raises `AllSourcesUnreachableError` |
+| Newer-ledger check fails (network, bad shape) | `fetch="stable"` | Never raises; serves the local snapshot with `SyncFallbackWarning` naming the reason |
+| Newer ledger exists but needs a newer `rates` | `fetch="stable"` | Serves the local snapshot; `SyncFallbackWarning` says to `pip install -U rates` |
+| Local snapshot past 28 days old | `bundled` / `stable` | `StaleLedgerWarning`, naming the next tier to try |
+| Transient HTTP failure (429, 5xx) | HTTP layer | Retries with backoff, honoring `Retry-After`, capped at 60s |
+| Clean HTTP error (404) or malformed JSON | HTTP layer | Never retries; no wait fixes it |
+| Bad flag value or incompatible flag combination | CLI | Exit 2, plain sentence, typo suggestion when one is close |
+| Caught `RatesError` from the load layer | CLI | Exit 1; extra hint pointing at `--fetch stable` or the bundled tier when a live fusion failed |
+| Broken pipe (piping into `head`, pager quits) | CLI | Caught so shutdown doesn't print a second, confusing traceback |
+
+### Observability
+
+`traceact` is optional and lazily resolved: absent, every `@traced(...)` decorator is an identity no-op and the import is never attempted until a traced call runs, so a cold CLI invocation or a tab completion never pays for it. Present, the CLI's own entrypoint configures a quiet JSONL sink at `~/.traceact/rates.jsonl` (only when nothing else already configured one) and traces key operations by name (`registry.load`, `fusion.fetch_sources`, `cli.run`). Independent of tracing, every fused registry documents its own decisions inline: the envelope's `resolution` object carries the full ladder order and each source's scorecard (registry rank, coverage, override reason, measured accuracy) as of that build, so any one model's price decision is replayable straight from the ledger file, no trace required.
 
 ---
 
