@@ -5,6 +5,7 @@
 ### Added
 
 - `--reasoning-level` and `--reasoning-control` filters, with the matching `reasoning_level`/`reasoning_control` criteria in `Registry.filter()`: narrow to models exposing a named thinking level (`low`, `medium`, `high`, ...) or a reasoning dial shape (`effort`, `budget_tokens`, `toggle`). A value the data doesn't carry is refused with the queryable set listed, and tab completion offers the data's own levels and controls.
+- A `REASONING` column in `list`/`filter`/`search` tables: the named levels joined with `/` (`low/medium/high`), or the control's own word where a model has no named levels (`toggle`, `budget_tokens`), in the same vocabulary the `--reasoning-*` flags take.
 
 ## 0.0.4 (2026-09-01)
 

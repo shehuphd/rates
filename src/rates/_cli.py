@@ -76,6 +76,7 @@ DOMAINS: dict[str, dict[str, Any]] = {
             ("PROVIDER", lambda m: m.provider),
             ("MODEL", lambda m: m.id),
             ("TYPE", lambda m: m.type or ""),
+            ("REASONING", lambda m: _fmt_reasoning(m)),
             ("IN $/MTOK", lambda m: _fmt_rate(m.price.get("input_mtok"))),
             ("OUT $/MTOK", lambda m: _fmt_rate(m.price.get("output_mtok"))),
             ("STATUS", lambda m: m.lifecycle.status or ""),
@@ -181,6 +182,21 @@ def _fmt_rate(rate: float | None) -> str:
     if rate is None:
         return ""
     return f"{rate:g}"
+
+
+def _fmt_reasoning(m: Any) -> str:
+    """A model's thinking modes for the table: the named levels joined
+    with "/", the control's own word (toggle, budget_tokens) when there
+    are no named levels, "yes" for a reasoning block with no known
+    control, and empty for a model that doesn't reason. Same vocabulary
+    as the data and the --reasoning-* flags, so a value read here can be
+    typed straight back into a filter."""
+    r = m.reasoning
+    if r is None:
+        return ""
+    if r.levels:
+        return "/".join(lv.label for lv in r.levels)
+    return r.control or "yes"
 
 
 def _fmt_domain_rate(price: Any, headline: Sequence[str]) -> str:

@@ -153,6 +153,16 @@ def test_bool_flag(capsys):
     assert "claude-opus-5" in out and "claude-haiku-4-5" not in out
 
 
+def test_list_renders_the_reasoning_column(capsys):
+    _, out, _ = run(capsys, "ai", "list")
+    header = out.splitlines()[0]
+    assert header.index("TYPE") < header.index("REASONING") < header.index("IN $/MTOK")
+    opus_row = next(line for line in out.splitlines() if "claude-opus-5" in line)
+    assert "low/high" in opus_row  # the levels, in the data's own words
+    haiku_row = next(line for line in out.splitlines() if "claude-haiku-4-5" in line)
+    assert "low" not in haiku_row  # no reasoning block renders an empty cell
+
+
 def test_reasoning_level_flag_narrows_to_models_exposing_that_level(capsys):
     code, out, _ = run(capsys, "ai", "filter", "--reasoning-level", "low")
     assert code == 0
