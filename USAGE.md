@@ -29,13 +29,13 @@ rates ai list
 ```
 
 ```
-PROVIDER  MODEL                              TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
-302ai     MiniMax-M1                         chat                             0.132      1.254       active
-302ai     MiniMax-M2                         chat                             0.33       1.32        active
-302ai     MiniMax-M2.1                       chat                             0.3        1.2         active
+PROVIDER  MODEL                                TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
+302ai     MiniMax-M1                           chat                             0.132      1.254       active
+302ai     MiniMax-M2                           chat                             0.33       1.32        active
+302ai     MiniMax-M2.1                         chat  yes                        0.3        1.2         active
 ...
 
-20 of 7109 shown (--limit 0 shows all)
+20 of 7252 shown (--limit 0 shows all)
 ```
 
 Everything about one model:
@@ -171,15 +171,15 @@ rates ai info
 ```
 domain: ai
   schema version: 1.0.0
-  snapshot: 2026-09-01 (1 day old)
-  models: 7109
-  providers: 202
-  type known: 3897 of 7109 (untyped models never match --type)
-  sources: ok (checked 2026-09-01)
+  snapshot: 2026-09-10 (0 days old)
+  models: 7252
+  providers: 203
+  type known: 4290 of 7252 (untyped models never match --type)
+  sources: ok (checked 2026-09-10)
   Note: Services with unpublished, inaccessible, or non-unit pricing (subscriptions, platform bundles) aren't listed.
 ```
 
-The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-09-01; two sources inaccessible`) when some didn't.
+The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-09-10; two sources inaccessible`) when some didn't.
 
 Past 28 days, commands print a staleness warning with the ways to refresh. One flag fetches fresher data on demand, on any command:
 

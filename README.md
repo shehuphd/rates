@@ -21,13 +21,13 @@ rates ai list
 ```
 
 ```
-PROVIDER  MODEL                              TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
-302ai     MiniMax-M1                         chat                             0.132      1.254       active
-302ai     MiniMax-M2                         chat                             0.33       1.32        active
-302ai     MiniMax-M2.1                       chat                             0.3        1.2         active
+PROVIDER  MODEL                                TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
+302ai     MiniMax-M1                           chat                             0.132      1.254       active
+302ai     MiniMax-M2                           chat                             0.33       1.32        active
+302ai     MiniMax-M2.1                         chat  yes                        0.3        1.2         active
 ...
 
-20 of 7109 shown (--limit 0 shows all)
+20 of 7252 shown (--limit 0 shows all)
 ```
 
 ```bash

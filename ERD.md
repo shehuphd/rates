@@ -108,7 +108,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `price` | `PRICE_ENTRY[]` | models.dev, the rest filled from LiteLLM/genai-prices | See below |
 | `price_discrepancies` | `PRICE_DISCREPANCY[]` | Computed during fusion | Empty when sources agree, not `null`. See below |
 | `reasoning` | `REASONING` \| null | models.dev, cross-checked against OpenRouter | Absent, not empty, when the model has no reasoning capability |
-| `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-01", "litellm": "2026-09-01"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
+| `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-10", "litellm": "2026-09-10"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
 | `lifecycle` | `LIFECYCLE` | models.dev (`status`, `release_date`) + LiteLLM (`deprecation_date`) | See below |
 | `observed_at` | datetime \| absent | Not supplied for AI | A UTC instant recording when this record's underlying value was observed upstream. Absent in the AI domain: list prices are announced, not observed to the second, and no source dates a price that finely. It exists on the record so a domain whose values move continuously (a market price) fills a stricter value into a field already present, rather than a later domain forcing a breaking change to add it. Distinct from the envelope's `snapshot_date` (a release's calendar identity) and from a source's `fetched_at` (when we reached the source): this is when the *value* was true |
 | `alias` | `ALIAS` \| absent | KeyCall's per-provider alias-convention catalog, baked in at ledger-build time | Absent for a dated/pinned id, or a provider with no recorded convention. See below |
@@ -266,7 +266,7 @@ The one axis flagged as most important to get right: knowing whether a model is 
 
 ## Worked example
 
-The shipped record for `claude-opus-5` (ledger snapshot 2026-09-01):
+The shipped record for `claude-opus-5` (ledger snapshot 2026-09-10):
 
 ```json
 {
@@ -304,26 +304,26 @@ The shipped record for `claude-opus-5` (ledger snapshot 2026-09-01):
   "tool_call": true,
   "structured_output": true,
   "lifecycle": { "status": "active", "release_date": "2026-07-24", "deprecation_date": "2027-07-24" },
-  "sources": { "litellm": "2026-09-01", "models_dev": "2026-09-01", "openrouter": "2026-09-01" }
+  "sources": { "litellm": "2026-09-10", "models_dev": "2026-09-10", "openrouter": "2026-09-10" }
 }
 ```
 
-`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. `deepseek/deepseek-chat-v3.1` on OpenRouter is the case where they don't (same snapshot; the record carries four notes, the two for `input_mtok` shown here, both naming the value that shipped):
+`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. `deepseek/deepseek-chat-v3.1` on OpenRouter is the case where they don't (same snapshot; the record carries three notes, the two for `input_mtok` shown here, both naming the value that shipped):
 
 ```json
 {
   "provider": "openrouter",
   "id": "deepseek/deepseek-chat-v3.1",
-  "price": { "currency": "USD", "input_mtok": 0.2, "output_mtok": 0.8, "cache_read_mtok": 0.55 },
+  "price": { "currency": "USD", "input_mtok": 0.2, "output_mtok": 0.8, "cache_read_mtok": 0.13 },
   "price_discrepancies": [
     {
       "field": "input_mtok",
       "chosen_source": "litellm",
       "chosen_value": 0.2,
       "other_source": "models_dev",
-      "other_value": 0.55,
+      "other_value": 0.25,
       "resolved_by": "freshness",
-      "difference_pct": 63.6
+      "difference_pct": 20.0
     },
     {
       "field": "input_mtok",
