@@ -1,10 +1,10 @@
 name: ledger
 
-# Manual-only until a first run succeeds; the weekly cron gets enabled
-# after that:
-#   schedule:
-#     - cron: "0 6 * * 1"
+# Weekly rebuild of the bundled AI ledger from the upstream sources,
+# plus manual runs on demand.
 on:
+  schedule:
+    - cron: "0 6 * * 1"  # Mondays 06:00 UTC
   workflow_dispatch:
 
 permissions:
