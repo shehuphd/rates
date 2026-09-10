@@ -489,11 +489,13 @@ def test_fit_terminal_shrinks_the_widest_column_on_a_tty(monkeypatch):
     assert widths[0] == 10  # the narrow column is untouched
 
 
-# traceact configuration behavior (traceact is installed in the dev venv)
+# traceact configuration behavior (traceact is an optional dev dependency;
+# these tests skip when it isn't importable)
 
 
 @pytest.fixture
 def clean_traceact():
+    pytest.importorskip("traceact")
     import traceact
     from traceact.config import get_package_sinks
 
