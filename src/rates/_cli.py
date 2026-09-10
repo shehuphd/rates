@@ -60,6 +60,8 @@ DOMAINS: dict[str, dict[str, Any]] = {
             "modality-input": {"kw": "modality_input", "core": False},
             "modality-output": {"kw": "modality_output", "core": False},
             "price-unit": {"kw": "price_unit", "core": True},
+            "reasoning-level": {"kw": "reasoning_level", "core": False},
+            "reasoning-control": {"kw": "reasoning_control", "core": False},
         },
         "bool_flags": {
             "tool-call": {"kw": "tool_call"},
@@ -303,22 +305,32 @@ def _kind_of(action: argparse.Action | None) -> str | None:
     return _TYPE_HINTS.get(action.type)
 
 
+# Flags whose value vocabulary isn't fixed at parse time like a choices=
+# flag but lives in the data, listable through the same candidate store
+# tab completion reads.
+_DATA_CHOICE_DESTS = {
+    "price_unit": "price_units",
+    "reasoning_level": "reasoning_levels",
+    "reasoning_control": "reasoning_controls",
+}
+
+
 def _value_choices(action: argparse.Action | None) -> str | None:
     """Every valid value for a flag, comma-joined, when the set is
-    small and known: argparse's own choices=, or --price-unit's, whose
-    vocabulary isn't fixed at parse time like a choices= flag but can
-    be listed in full anyway, read the same cheap way tab completion
-    already does, no full Registry load."""
+    small and known: argparse's own choices=, or a data-vocabulary
+    flag's (see _DATA_CHOICE_DESTS), read the same cheap way tab
+    completion already does, no full Registry load."""
     if action is None:
         return None
     if action.choices:
         return ", ".join(str(c) for c in action.choices)
-    if action.dest == "price_unit":
+    key = _DATA_CHOICE_DESTS.get(action.dest)
+    if key is not None:
         try:
-            units = _candidates("ai").get("price_units") or []
+            values = _candidates("ai").get(key) or []
         except (OSError, ValueError, KeyError, ImportError):
-            units = []
-        return ", ".join(units) if units else None
+            values = []
+        return ", ".join(values) if values else None
     return None
 
 
@@ -1159,6 +1171,8 @@ _VALUE_COMPLETERS = {
     "--currency": "currencies",
     "--price-unit": "price_units",
     "--model": "models",
+    "--reasoning-level": "reasoning_levels",
+    "--reasoning-control": "reasoning_controls",
 }
 
 
@@ -1224,6 +1238,18 @@ def _candidates(domain: str) -> dict[str, list[str]]:
                 for unit in (m.get("price") or {})
                 if unit != "currency"
             }
+        ),
+        "reasoning_levels": sorted(
+            {
+                lv.get("label") or ""
+                for m in models
+                for lv in (m.get("reasoning") or {}).get("levels") or []
+            }
+            - {""}
+        ),
+        "reasoning_controls": sorted(
+            {(m.get("reasoning") or {}).get("control") or "" for m in models}
+            - {""}
         ),
     }
     try:

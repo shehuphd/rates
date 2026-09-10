@@ -108,6 +108,8 @@ rates ai filter --model-contains opus          # every opus-family model
 | `--status` | `active`, `beta`, or `deprecated` |
 | `--modality-input` / `--modality-output` | A content format the model accepts/produces: `text`, `image`, `audio`, ... |
 | `--tool-call` / `--structured-output` | `true` or `false`; models where the fact is unknown match neither |
+| `--reasoning-level` | A named thinking level the model exposes: `low`, `medium`, `high`, ... Models without named levels (an on/off toggle, a numeric budget) never match a level |
+| `--reasoning-control` | How the reasoning dial works: `effort` (named levels), `budget_tokens` (a numeric thinking budget), `toggle` (on/off only) |
 | `--price-min` / `--price-max` | Price bounds, always with `--price-unit` |
 | `--price-unit` | Which billing unit the bounds compare against |
 
@@ -117,7 +119,7 @@ Price bounds always name their unit, because models bill on different units (`in
 rates ai filter --provider anthropic --price-max 3 --price-unit input_mtok
 ```
 
-A bound without a unit is an error that lists the units present in the data.
+A bound without a unit is an error that lists the units present in the data; a reasoning level or control the data doesn't carry is refused the same way, listing what's queryable.
 
 Flags combine with AND semantics. Unscoped queries take the shared flags plus `--id`/`--id-contains`, the domain-neutral name for the identity field.
 

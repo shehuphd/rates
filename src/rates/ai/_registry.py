@@ -42,6 +42,8 @@ def _valid_criteria() -> list[str]:
         "price_min",
         "price_max",
         "price_unit",
+        "reasoning_level",
+        "reasoning_control",
     ]
     return sorted(names)
 
@@ -106,6 +108,26 @@ class Registry:
             units.update(m.price.units)
         return sorted(units)
 
+    def _reasoning_levels(self) -> list[str]:
+        """Every named reasoning level any model in this registry carries,
+        sorted. Feeds the reasoning_level criterion's validation, so a
+        rejected value can list what's queryable."""
+        labels: set[str] = set()
+        for m in self.models:
+            if m.reasoning is not None:
+                labels.update(lv.label for lv in m.reasoning.levels)
+        return sorted(labels)
+
+    def _reasoning_controls(self) -> list[str]:
+        """Every reasoning control shape any model in this registry
+        carries, sorted. Feeds the reasoning_control criterion's
+        validation."""
+        controls: set[str] = set()
+        for m in self.models:
+            if m.reasoning is not None and m.reasoning.control is not None:
+                controls.add(m.reasoning.control)
+        return sorted(controls)
+
     def filter(self, **criteria: Any) -> Registry:
         """Narrow to models matching every supplied criterion.
 
@@ -115,7 +137,11 @@ class Registry:
         caller wrote the broader form. ``price_min``/``price_max`` always
         need an explicit ``price_unit`` naming the billing unit to compare
         against; a model that doesn't bill on that unit never matches a
-        price constraint. Unknown criteria raise, they're never ignored.
+        price constraint. ``reasoning_level`` matches models whose
+        reasoning exposes that named level; ``reasoning_control`` matches
+        how the reasoning dial works (``effort``, ``budget_tokens``,
+        ``toggle``); both validate against the values present in this
+        registry. Unknown criteria raise, they're never ignored.
         """
         criteria = dict(criteria)
         price_unit = criteria.pop("price_unit", None)
@@ -227,6 +253,34 @@ class Registry:
         if name == "modality_output":
             want = str(value).casefold()
             return lambda m: want in (v.casefold() for v in m.modalities.output)
+
+        if name == "reasoning_level":
+            want = str(value).casefold()
+            known = self._reasoning_levels()
+            if want not in {k.casefold() for k in known}:
+                # A level no model carries would match nothing, silently;
+                # same treatment as an unknown price unit.
+                raise ValueError(
+                    f"{value!r} isn't a reasoning level in this registry. "
+                    "Levels in this registry: " + ", ".join(known) + "."
+                )
+            return lambda m: m.reasoning is not None and want in (
+                lv.label.casefold() for lv in m.reasoning.levels
+            )
+
+        if name == "reasoning_control":
+            want = str(value).casefold()
+            known = self._reasoning_controls()
+            if want not in {k.casefold() for k in known}:
+                raise ValueError(
+                    f"{value!r} isn't a reasoning control in this registry. "
+                    "Controls in this registry: " + ", ".join(known) + "."
+                )
+            return lambda m: (
+                m.reasoning is not None
+                and m.reasoning.control is not None
+                and m.reasoning.control.casefold() == want
+            )
 
         if name in ("price_min", "price_max"):
             # filter() already refused a price bound without a unit.

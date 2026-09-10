@@ -102,6 +102,21 @@ def fixture_loader(monkeypatch):
             ),
             "currencies": ["USD"],
             "price_units": registry.price_units(),
+            "reasoning_levels": sorted(
+                {
+                    lv.label
+                    for m in registry
+                    if m.reasoning is not None
+                    for lv in m.reasoning.levels
+                }
+            ),
+            "reasoning_controls": sorted(
+                {
+                    m.reasoning.control
+                    for m in registry
+                    if m.reasoning is not None and m.reasoning.control
+                }
+            ),
         }
 
     monkeypatch.setattr(_cli, "_candidates", candidates)
@@ -136,6 +151,31 @@ def test_contains_flag_maps_to_the_contains_criterion(capsys):
 def test_bool_flag(capsys):
     _, out, _ = run(capsys, "ai", "filter", "--tool-call", "true")
     assert "claude-opus-5" in out and "claude-haiku-4-5" not in out
+
+
+def test_reasoning_level_flag_narrows_to_models_exposing_that_level(capsys):
+    code, out, _ = run(capsys, "ai", "filter", "--reasoning-level", "low")
+    assert code == 0
+    assert "claude-opus-5" in out and "claude-haiku-4-5" not in out
+
+
+def test_reasoning_control_flag_narrows_by_dial_shape(capsys):
+    code, out, _ = run(capsys, "ai", "filter", "--reasoning-control", "effort")
+    assert code == 0
+    assert "claude-opus-5" in out and "gemini-pro-latest" not in out
+
+
+def test_unknown_reasoning_level_exits_2_listing_the_data_levels(capsys):
+    code, _, err = run(capsys, "ai", "filter", "--reasoning-level", "ultra")
+    assert code == 2
+    assert "isn't a reasoning level" in err
+    assert "high, low" in err  # the fix is in the message, from the data
+
+
+def test_unknown_reasoning_control_exits_2_listing_the_data_controls(capsys):
+    code, _, err = run(capsys, "ai", "filter", "--reasoning-control", "dial")
+    assert code == 2
+    assert "isn't a reasoning control" in err and "effort" in err
 
 
 def test_price_flags(capsys):
@@ -777,6 +817,13 @@ def test_complete_after_the_show_id_offers_only_flags_show_accepts():
 def test_complete_price_unit_values():
     candidates = _cli.complete(["--", "ai", "filter", "--price-unit", "out"])
     assert "output_mtok" in candidates and "output_per_second" in candidates
+
+
+def test_complete_reasoning_values_come_from_the_data():
+    candidates = _cli.complete(["--", "ai", "filter", "--reasoning-level", ""])
+    assert candidates == ["high", "low"]
+    candidates = _cli.complete(["--", "ai", "filter", "--reasoning-control", ""])
+    assert candidates == ["effort"]
 
 
 def test_complete_fetch_values():

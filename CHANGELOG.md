@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.0 (unreleased)
+
+### Added
+
+- `--reasoning-level` and `--reasoning-control` filters, with the matching `reasoning_level`/`reasoning_control` criteria in `Registry.filter()`: narrow to models exposing a named thinking level (`low`, `medium`, `high`, ...) or a reasoning dial shape (`effort`, `budget_tokens`, `toggle`). A value the data doesn't carry is refused with the queryable set listed, and tab completion offers the data's own levels and controls.
+
 ## 0.0.4 (2026-09-01)
 
 First functional release, shipped under a pre-1.0 version number so the PyPI publishing pipeline (branch protection, the GitHub Release trigger, the trusted-publisher OIDC flow) proves out on a disposable version before v1.0.0 claims it.

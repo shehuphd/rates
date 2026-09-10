@@ -27,6 +27,15 @@ REGISTRY = {
             "tool_call": True,
             "structured_output": True,
             "price": {"currency": "USD", "input_mtok": 5, "output_mtok": 25},
+            "reasoning": {
+                "control": "effort",
+                "levels": [
+                    {"label": "low", "rank": 1},
+                    {"label": "medium", "rank": 2},
+                    {"label": "high", "rank": 3},
+                ],
+                "default": "medium",
+            },
             "lifecycle": {"status": "active"},
         },
         {
@@ -45,6 +54,7 @@ REGISTRY = {
             "type": "chat",
             "tool_call": True,
             "price": {"currency": "USD", "input_mtok": 1, "output_mtok": 5},
+            "reasoning": {"control": "toggle"},
             "lifecycle": {"status": "active"},
         },
         {
@@ -80,6 +90,8 @@ def test_unknown_criterion_raises_and_names_it(registry):
 
 def test_unknown_criterion_error_lists_valid_names(registry):
     with pytest.raises(TypeError, match="model_contains"):
+        registry.filter(colour="blue")
+    with pytest.raises(TypeError, match="reasoning_level.*reasoning_control|reasoning_control.*reasoning_level"):
         registry.filter(colour="blue")
 
 
@@ -190,6 +202,52 @@ def test_status_filter(registry):
 
 def test_modality_membership_is_case_insensitive(registry):
     result = registry.filter(modality_input="IMAGE")
+    assert {m.id for m in result} == {"claude-opus-5"}
+
+
+# Reasoning criteria: failure paths first, then match semantics
+
+
+def test_unknown_reasoning_level_raises_listing_this_registrys_levels(registry):
+    with pytest.raises(ValueError, match="'ultra' isn't a reasoning level"):
+        registry.filter(reasoning_level="ultra")
+    with pytest.raises(ValueError, match="high, low, medium"):
+        registry.filter(reasoning_level="ultra")
+
+
+def test_unknown_reasoning_control_raises_listing_this_registrys_controls(registry):
+    # budget_tokens is a valid schema value, but no model here carries it;
+    # matching nothing silently is the failure this guards against.
+    with pytest.raises(ValueError, match="'budget_tokens' isn't a reasoning control"):
+        registry.filter(reasoning_control="budget_tokens")
+    with pytest.raises(ValueError, match="effort, toggle"):
+        registry.filter(reasoning_control="budget_tokens")
+
+
+def test_reasoning_level_matches_membership_case_insensitively(registry):
+    assert {m.id for m in registry.filter(reasoning_level="MEDIUM")} == {
+        "claude-opus-5"
+    }
+
+
+def test_reasoning_level_never_matches_a_model_without_named_levels(registry):
+    # claude-haiku-4-5 reasons (toggle) but exposes no named levels; the
+    # rest carry no reasoning block at all. None may match a level.
+    result = registry.filter(reasoning_level="low")
+    assert {m.id for m in result} == {"claude-opus-5"}
+
+
+def test_reasoning_control_matches_the_dial_shape(registry):
+    assert {m.id for m in registry.filter(reasoning_control="toggle")} == {
+        "claude-haiku-4-5"
+    }
+    assert {m.id for m in registry.filter(reasoning_control="EFFORT")} == {
+        "claude-opus-5"
+    }
+
+
+def test_reasoning_criteria_combine_with_other_criteria(registry):
+    result = registry.filter(provider="anthropic", reasoning_level="high")
     assert {m.id for m in result} == {"claude-opus-5"}
 
 
