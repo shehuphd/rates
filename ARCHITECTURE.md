@@ -1,10 +1,10 @@
 # Architecture
 
-The reasoning behind `rates`: a STRuFO quick reference first, then the two decisions behind everything else, which data a record stores and how the project is structured so more than one pricing domain can fit, with the concrete data model in [ERD.md](ERD.md).
+The reasoning behind `rates`: a STRuFOL quick reference first, then the two decisions behind everything else, which data a record stores and how the project is structured so more than one pricing domain can fit, with the concrete data model in [ERD.md](ERD.md).
 
-## STRuFO
+## STRuFOL
 
-[S]hape, [T]echnical stack, [Ru]n details, [F]ailure modes, [O]bservability.
+[S]hape, [T]echnical stack, [Ru]n details, [F]ailure modes, [O]bservability, [L]imitations.
 
 ### Shape
 
@@ -61,6 +61,14 @@ Typed, per cause. Every stop records why, not just that it stopped.
 ### Observability
 
 `traceact` is optional and lazily resolved: absent, every `@traced(...)` decorator is an identity no-op and the import is never attempted until a traced call runs, so a cold CLI invocation or a tab completion never pays for it. Present, the CLI's own entrypoint configures a quiet JSONL sink at `~/.traceact/rates.jsonl` (only when nothing else already configured one) and traces key operations by name (`registry.load`, `fusion.fetch_sources`, `cli.run`). Independent of tracing, every fused registry documents its own decisions inline: the envelope's `resolution` object carries the full ladder order and each source's scorecard (registry rank, coverage, override reason, measured accuracy) as of that build, so any one model's price decision is replayable straight from the ledger file, no trace required.
+
+### Limitations
+
+- One domain is registered: `ai`. Cloud and quantum pricing appear in this document as vocabulary examples for the core contract, not as shipped domains.
+- No ranking or recommendation. `Registry.filter(...)` narrows by facts the caller supplies; there's no `recommend()`, no quality tier, and no "best model for X" answer anywhere in the API.
+- Bundled data is only as fresh as the last weekly ledger build. Past 4 weeks it warns rather than blocks, and anything fresher needs the opt-in `stable` or `live` tiers, which need network access.
+- `live` depends on four third-party sources whose schemas and uptime `rates` doesn't control. When models.dev is unreachable, the fusion refuses to return a result at all.
+- Type coverage is partial: the preferred source carries no type field, so a record no fallback source types ships untyped rather than guessed.
 
 ## What a record stores
 
