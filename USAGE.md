@@ -35,7 +35,7 @@ PROVIDER  MODEL                                TYPE  REASONING                  
 302ai     MiniMax-M2.1                         chat  yes                        0.3        1.2         active
 ...
 
-20 of 7252 shown (--limit 0 shows all)
+20 of 7270 shown (--limit 0 shows all)
 ```
 
 Everything about one model:
@@ -172,9 +172,9 @@ rates ai info
 domain: ai
   schema version: 1.0.0
   snapshot: 2026-09-10 (0 days old)
-  models: 7252
+  models: 7270
   providers: 203
-  type known: 4290 of 7252 (untyped models never match --type)
+  type known: 4298 of 7270 (untyped models never match --type)
   sources: ok (checked 2026-09-10)
   Note: Services with unpublished, inaccessible, or non-unit pricing (subscriptions, platform bundles) aren't listed.
 ```

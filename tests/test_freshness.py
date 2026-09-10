@@ -133,7 +133,8 @@ def test_write_cache_survives_an_unwritable_cache_dir(monkeypatch, isolated_rate
         raise PermissionError("[Errno 13] Permission denied: '/nonexistent'")
 
     monkeypatch.setattr(_freshness, "_cache_path", unwritable)
-    _freshness._write_cache("https://example.test/a.atom", date(2026, 8, 20))
+    # The write is a no-op that returns None instead of propagating the error.
+    assert _freshness._write_cache("https://example.test/a.atom", date(2026, 8, 20)) is None
 
 
 def test_cached_freshness_still_returns_when_the_cache_is_unwritable(

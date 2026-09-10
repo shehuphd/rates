@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.1 (2026-09-10)
+
+### Fixed
+
+- `load(fetch="live")` no longer raises when the cache directory can't be written (for example a container running as a user whose home directory is unwritable). The source-freshness cache write degrades to a no-op the way the ledger caches already do, so a successful live fusion returns its result instead of being lost to a `PermissionError`.
+
+### Changed
+
+- The bundled ledger refreshed to the current 2026-09-10 snapshot (7,270 models).
+
 ## 1.0.0 (2026-09-10)
 
 The first stable release. The CLI, the Python API, and the fused ledger carry forward from the 0.0.x pre-releases that proved the publishing pipeline, with the reasoning query surface added and the bundled data refreshed.
