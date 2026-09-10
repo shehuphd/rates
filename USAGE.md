@@ -162,7 +162,7 @@ Errors never dump the full usage block; a specific mistake gets a specific answe
 
 ### Data freshness
 
-The bundled snapshot refreshes with each release and reports its own age:
+The bundled snapshot refreshes with each release, and a fresh ledger publishes about weekly, so `--fetch stable` has newer data to pull between package upgrades. It reports its own age:
 
 ```bash
 rates ai info
