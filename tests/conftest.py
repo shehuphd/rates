@@ -6,6 +6,18 @@ import pytest
 _results = []
 
 
+@pytest.fixture(autouse=True)
+def _bundled_snapshot_notice_already_emitted():
+    """``load()``'s first-bundled-load snapshot notice fires once per
+    process. Mark it emitted before each test so the ~360 tests that call
+    ``load()`` don't trip it incidentally; the tests that exercise the
+    notice reset the flag themselves."""
+    from rates.ai import _load
+
+    _load._snapshot_noted = True
+    yield
+
+
 @pytest.fixture(autouse=True, scope="session")
 def traceact_sink(tmp_path_factory):
     """The test suite is the consuming app, so it configures tracing:

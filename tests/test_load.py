@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from rates import (
+    BundledSnapshotWarning,
     SourceUnreachableWarning,
     StaleLedgerWarning,
     SyncFallbackWarning,
@@ -76,7 +77,35 @@ def test_ledger_at_the_threshold_does_not_warn(bundled):
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         load()
-    assert caught == []
+    assert not [w for w in caught if issubclass(w.category, StaleLedgerWarning)]
+
+
+def test_first_bundled_load_notes_the_snapshot(bundled):
+    load_module._snapshot_noted = False
+    with pytest.warns(BundledSnapshotWarning, match="serving its bundled snapshot.*fetch='stable'"):
+        load()
+
+
+def test_bundled_snapshot_notice_fires_once_per_process(bundled):
+    load_module._snapshot_noted = False
+    with pytest.warns(BundledSnapshotWarning):
+        load()
+    # A second bundled load in the same process is silent.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        load()
+    assert not [w for w in caught if issubclass(w.category, BundledSnapshotWarning)]
+
+
+def test_stale_bundled_load_suppresses_the_snapshot_notice(bundled):
+    old = (datetime.now(timezone.utc).date() - timedelta(days=40)).isoformat()
+    bundled["data"] = {**FRESH, "snapshot_date": old}
+    load_module._snapshot_noted = False
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        load()
+    assert any(issubclass(w.category, StaleLedgerWarning) for w in caught)
+    assert not [w for w in caught if issubclass(w.category, BundledSnapshotWarning)]
 
 
 # Live tier

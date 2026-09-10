@@ -6,6 +6,7 @@ deciding to the caller. The AI domain lives at ``rates.ai``.
 
 from ._errors import (
     AllSourcesUnreachableError,
+    BundledSnapshotWarning,
     LiveFusionError,
     PreferredSourceUnavailableError,
     RatesError,
@@ -15,10 +16,11 @@ from ._errors import (
     SyncFallbackWarning,
 )
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 __all__ = [
     "AllSourcesUnreachableError",
+    "BundledSnapshotWarning",
     "LiveFusionError",
     "PreferredSourceUnavailableError",
     "RatesError",

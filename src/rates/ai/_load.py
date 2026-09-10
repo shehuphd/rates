@@ -27,6 +27,7 @@ from typing import Any, Literal
 
 from .. import _cache
 from .._errors import (
+    BundledSnapshotWarning,
     SourceUnreachableWarning,
     StaleLedgerWarning,
     SyncFallbackWarning,
@@ -82,10 +83,37 @@ def load(
     return _load_bundled()
 
 
+# One notice per process that the default tier is serving a dated snapshot,
+# so a caller pricing against it (a spend cap, say) learns it's not live data
+# without a warning on every call. A newer snapshot in a long-lived process
+# resets nothing here; the notice is about the tier, not the date.
+_snapshot_noted = False
+
+
 def _load_bundled() -> Registry:
     local = _best_local()
-    _warn_if_stale(local.get("snapshot_date"))
+    snapshot_date = local.get("snapshot_date")
+    # When the snapshot is stale, StaleLedgerWarning is the stronger signal
+    # and already names the date and the fix, so the snapshot notice steps
+    # aside to avoid a double warning on the same load.
+    if not _warn_if_stale(snapshot_date):
+        _note_bundled_snapshot(snapshot_date)
     return Registry.from_dict(local)
+
+
+def _note_bundled_snapshot(snapshot_date: str | None) -> None:
+    global _snapshot_noted
+    if _snapshot_noted or not snapshot_date:
+        return
+    _snapshot_noted = True
+    warnings.warn(
+        f"the AI-pricing registry is serving its bundled snapshot "
+        f"({snapshot_date}), the data shipped with this install; "
+        f"rates.ai.load(fetch='stable') checks for a newer published ledger "
+        f"and fetch='live' fuses the raw sources directly",
+        BundledSnapshotWarning,
+        stacklevel=3,
+    )
 
 
 def _best_local() -> dict[str, Any]:
@@ -109,9 +137,12 @@ def _read_bundled() -> dict[str, Any]:
     return data
 
 
-def _warn_if_stale(snapshot_date: str | None) -> None:
+def _warn_if_stale(snapshot_date: str | None) -> bool:
+    """Warn when the snapshot is past the staleness threshold. Returns
+    whether a warning was emitted, so the caller can suppress the milder
+    bundled-snapshot notice on the same load."""
     if not snapshot_date:
-        return
+        return False
     snapshot = datetime.fromisoformat(snapshot_date).date()
     age = (datetime.now(timezone.utc).date() - snapshot).days
     if age > STALENESS_THRESHOLD_DAYS:
@@ -125,6 +156,8 @@ def _warn_if_stale(snapshot_date: str | None) -> None:
             StaleLedgerWarning,
             stacklevel=3,
         )
+        return True
+    return False
 
 
 def _warn_unreachable_sources(statuses: dict[str, str]) -> None:

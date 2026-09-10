@@ -266,6 +266,8 @@ registry = rates.ai.load(fetch="live", force=True)        # skip live's 24-hour 
 
 `force=True` only combines with `fetch="live"`; it's a `ValueError` otherwise, since `bundled` and `stable` don't hold a cached result of their own for it to bypass.
 
+A default `load()` emits a `BundledSnapshotWarning` once per process on its first call, naming the snapshot date, so code pricing against the registry (a spend cap, say) knows it's reading a bundled snapshot rather than live data. Silence it with a `RatesWarning` filter if offline data is the deliberate choice; when the snapshot is also past the staleness threshold, `StaleLedgerWarning` carries the stronger signal and the notice steps aside.
+
 `fetch="stable"` never raises; any failed check falls back to the best local snapshot with a `SyncFallbackWarning`. `fetch="live"` raises when it can't produce an honest result, and warns with a `SourceUnreachableWarning` when it produced one but a non-preferred source was unreachable, so the fields that source enriches may be absent. Warnings use Python's `warnings` machinery, so you can escalate or silence them:
 
 ```python
@@ -282,6 +284,7 @@ warnings.simplefilter("error", rates.StaleLedgerWarning)  # stale data becomes a
 | `rates.AllSourcesUnreachableError` | Every upstream source failed |
 | `rates.PreferredSourceUnavailableError` | The preferred source failed; a result from fallbacks alone is refused |
 | `rates.RatesWarning` | Base class for every warning `rates` emits |
+| `rates.BundledSnapshotWarning` | A default `load()` served the bundled snapshot; emitted once per process on the first such call |
 | `rates.StaleLedgerWarning` | The best local snapshot is past its staleness threshold |
 | `rates.SyncFallbackWarning` | A `fetch="stable"` check couldn't complete; local data served |
 | `rates.SourceUnreachableWarning` | A `fetch="live"` fusion ran with a non-preferred source unreachable; its enriched fields may be absent |

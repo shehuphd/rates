@@ -39,17 +39,23 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/build_ledger.py
 
+      # Rewrite the exact count samples in the docs to the rebuilt ledger
+      # before the test suite runs its docs-count guard, so a refreshed
+      # ledger never leaves the docs quoting last week's figures.
+      - name: Sync doc counts to the rebuilt ledger
+        run: python scripts/sync_docs.py
+
       - name: Full test suite against the new ledger
         run: python -m pytest tests/ -q
 
       # Every run produces a new ledger by design (52 dated snapshots a
       # year; snapshot_date alone changes it), so there's no
       # skip-if-unchanged branch here.
-      - name: Commit bundled ledger
+      - name: Commit bundled ledger and doc counts
         run: |
           git config user.name "ledger-bot"
           git config user.email "actions@github.com"
-          git add src/rates/ai/ledger-ai.json.gz
+          git add src/rates/ai/ledger-ai.json.gz README.md USAGE.md
           git commit -m "Update bundled AI ledger ($(date -u +%F))"
           git push
 

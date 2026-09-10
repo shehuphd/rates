@@ -107,3 +107,19 @@ def test_changelog_model_count_and_date_match_bundled_ledger():
         f"CHANGELOG's latest-release line is stale against the bundled ledger; "
         f"expected {expected!r}"
     )
+
+
+def test_doc_count_samples_match_the_bundled_ledger():
+    # README and USAGE quote exact model, provider, and typed counts in their
+    # sample output; those drift every ledger rebuild (the CHANGELOG's rounded
+    # count hides it there). Assert they agree with the shipped ledger, so a
+    # stale figure fails the build. Resync with `python scripts/sync_docs.py`.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "sync_docs", ROOT / "scripts" / "sync_docs.py"
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.sync(check=True) == []

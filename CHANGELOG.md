@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 (2026-09-10)
+
+### Added
+
+- A once-per-process notice (`BundledSnapshotWarning`) on the first default `load()` in a process, naming the snapshot date and the `stable`/`live` tiers, so a caller pricing against the registry (a spend cap, say) knows it's reading a dated snapshot rather than live data. It's a `RatesWarning`, so a caller that has chosen offline data on purpose can silence it with a filter; when the snapshot is also past the staleness threshold, `StaleLedgerWarning` carries the signal instead.
+
 ## 1.0.1 (2026-09-10)
 
 ### Fixed

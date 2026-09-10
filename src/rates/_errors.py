@@ -29,6 +29,17 @@ class RatesWarning(Warning):
     """Base for every warning rates emits, so one filter covers them all."""
 
 
+class BundledSnapshotWarning(RatesWarning):
+    """A default ``load()`` served the bundled snapshot, emitted once per
+    process on the first such call. The message names the snapshot date and
+    the opt-in tiers, so a caller relying on current prices (a spend cap,
+    say) knows it's reading a dated snapshot rather than live data. It fires
+    even when the snapshot is fresh; a caller that has chosen offline data
+    on purpose can silence it with a ``RatesWarning`` filter. When the
+    snapshot is also past the staleness threshold, ``StaleLedgerWarning``
+    carries the stronger signal and this one is suppressed."""
+
+
 class StaleLedgerWarning(RatesWarning):
     """The bundled ledger is older than this domain's staleness
     threshold. The message names how stale and how to refresh."""
