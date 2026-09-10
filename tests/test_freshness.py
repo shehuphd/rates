@@ -125,6 +125,31 @@ def test_cached_freshness_fetches_and_caches_on_a_miss(monkeypatch, isolated_rat
     assert _freshness._read_cache(url) == date(2026, 8, 20)
 
 
+def test_write_cache_survives_an_unwritable_cache_dir(monkeypatch, isolated_rates_cache):
+    # An unwritable home (a container running as nobody with HOME=/nonexistent,
+    # a read-only mount) makes cache_dir() raise from mkdir. A best-effort
+    # freshness cache degrades to a no-op, never propagating.
+    def unwritable():
+        raise PermissionError("[Errno 13] Permission denied: '/nonexistent'")
+
+    monkeypatch.setattr(_freshness, "_cache_path", unwritable)
+    _freshness._write_cache("https://example.test/a.atom", date(2026, 8, 20))
+
+
+def test_cached_freshness_still_returns_when_the_cache_is_unwritable(
+    monkeypatch, isolated_rates_cache
+):
+    # The live-path regression: a cache-write failure must not lose a freshly
+    # fetched result. A fetch=live call on a machine that can't write a cache
+    # (an unwritable home) should still return current data, not raise.
+    def unwritable():
+        raise PermissionError("[Errno 13] Permission denied: '/nonexistent'")
+
+    monkeypatch.setattr(_freshness, "_cache_path", unwritable)
+    monkeypatch.setattr(_freshness, "_get_bytes", lambda url, timeout: _atom())
+    assert _freshness._cached_freshness("https://example.test/a.atom", None) == date(2026, 8, 20)
+
+
 # gather_source_freshness
 
 

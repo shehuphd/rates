@@ -180,7 +180,10 @@ def _read_cache(url: str) -> date | None:
 
 
 def _write_cache(url: str, value: date) -> None:
-    path = _cache_path()
+    try:
+        path = _cache_path()
+    except OSError:
+        return  # an unwritable cache dir costs the cache, never the result
     try:
         cache = json.loads(path.read_text())
     except (OSError, ValueError):
