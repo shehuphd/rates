@@ -27,7 +27,7 @@ PROVIDER  MODEL                                TYPE  REASONING                  
 302ai     MiniMax-M2.1                         chat  yes                        0.3        1.2         active
 ...
 
-20 of 7270 shown (--limit 0 shows all)
+20 of 7419 shown (--limit 0 shows all)
 ```
 
 ```bash
