@@ -87,11 +87,13 @@ def test_notice_covers_every_upstream_source():
     )
 
 
-def test_changelog_model_count_and_date_match_bundled_ledger():
-    # The latest release's line quotes an approximate model count and the
-    # snapshot date; both drift every time the ledger rebuilds. Read the
-    # shipped ledger and assert the line still agrees, so a stale figure
-    # fails the build instead of reaching a reader.
+def test_changelog_ledger_claims_agree_with_the_bundled_ledger():
+    # Release entries quote the ledger they shipped ("~7,000 models
+    # (2026-09-10 snapshot)"). The weekly rebuild advances the bundled
+    # ledger between releases, so the newest quoted claim may be older
+    # than the bundled snapshot, never newer; and when the dates agree
+    # (a release cut against this ledger) the count must agree too, so
+    # a stale figure fails the release build instead of reaching a reader.
     import gzip
     import json
 
@@ -100,13 +102,23 @@ def test_changelog_model_count_and_date_match_bundled_ledger():
     )
     rounded = round(len(ledger["models"]) / 1000) * 1000
     snapshot = ledger["snapshot_date"]
-    expected = f"~{rounded:,} models ({snapshot} snapshot)"
 
     changelog = (ROOT / "CHANGELOG.md").read_text()
-    assert expected in changelog, (
-        f"CHANGELOG's latest-release line is stale against the bundled ledger; "
-        f"expected {expected!r}"
+    claims = re.findall(
+        r"~([\d,]+) models \((\d{4}-\d{2}-\d{2}) snapshot\)", changelog
     )
+    assert claims, "CHANGELOG quotes no ledger claim to check"
+
+    count, date = max(claims, key=lambda claim: claim[1])
+    assert date <= snapshot, (
+        f"CHANGELOG claims a {date} snapshot but the bundled ledger is "
+        f"{snapshot}; the claim can't be newer than the data that ships"
+    )
+    if date == snapshot:
+        assert count == f"{rounded:,}", (
+            f"CHANGELOG's {date} claim says ~{count} models; the bundled "
+            f"ledger has ~{rounded:,}"
+        )
 
 
 def test_doc_count_samples_match_the_bundled_ledger():
