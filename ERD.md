@@ -150,6 +150,8 @@ Some providers reprice a model past a usage threshold, most commonly context siz
 
 Each tier's `price` holds only the units that change; unnamed units fall through to base. `when` is open-shaped: `context` is the only dimension upstream data carries today, and a dimension beyond it (volume, batch) fits without schema change. On the caller side the tier is explicit opt-in, matching `price_unit`: `model.price` is the base tier, `model.price_for(context=500000)` resolves the applicable overrides into a flat price. `filter(price_max=...)` compares against base.
 
+A `context` tier reprices the whole request, not only the tokens past the threshold: the condition classifies the request, and every unit the tier names applies to all of that request's usage, output included. This matches how the providers publish it (Google's Gemini table prices "prompts <= 200k tokens" and "prompts > 200k tokens" as classes of prompt, with output rates keyed on the same prompt size; verified against the published pages 2026-09-25), and it's what `price_for` returns.
+
 Covers all three upstream forms: models.dev's `tiers` list, its `context_over_200k` shorthand (a tier with `over: 200000`), and genai-prices' tiered list form.
 
 ## `PRICE_DISCREPANCY`
