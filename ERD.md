@@ -25,8 +25,8 @@ erDiagram
     SOURCE {
         string name
         datetime fetched_at "UTC instant the source was reached"
-        string role "preferred | fallback | validation"
-        string status "ok | unreachable"
+        string role "preferred | fallback | validation | origin"
+        string status "ok | unreachable | suspect"
     }
     MODEL {
         string provider
@@ -87,10 +87,10 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Semver of this document's shape, independent of the `rates` package version. A later additive field bumps the minor; a reader checks the major, so an older ledger still loads |
+| `schema_version` | string | Semver of this document's shape, independent of the `rates` package version. A later additive field, or a new value in an existing vocabulary (a source role, a status, a price unit), bumps the minor; a reader checks the major, so an older ledger still loads |
 | `domain` | string | `"ai"` for this domain |
 | `snapshot_date` | date | The daily snapshot's calendar identity: the value a `stable` check compares to find a newer release, and the date in its `ledger-YYYY-MM-DD` tag. A date, not an instant, because the AI ledger publishes once a day; a continuously-updated domain defines its own envelope. This, not a per-model timestamp, is how "did this change" gets answered for AI, by diffing two dated releases |
-| `sources` | `SOURCE[]` | Every upstream source consulted for this release, with its role and `status`. Each carries `fetched_at`, the UTC instant it was reached. On a `ledger` release every source is expected `ok`; on a `live` call, `status` is how a caller sees that a source was skipped for being unreachable rather than silently missing |
+| `sources` | `SOURCE[]` | Every upstream source consulted for this release, with its role and `status`. Each carries `fetched_at`, the UTC instant it was reached. Roles: the four aggregator feeds are `preferred`, `fallback`, or `validation`; a vendor's own pricing page, read directly, is `origin`. On a `ledger` release every source is expected `ok`; on a `live` call, `status` is how a caller sees that a source was skipped. `unreachable` means the fetch failed; `suspect`, defined for origin pages only, means the page was fetched but yielded no records, the signature of a redesign the parser no longer recognizes. A suspect source contributes nothing to the release |
 | `resolution` | object | The resolution machinery this build was decided with: `ladder` (the rung order) and per-source scorecards (`registry_rank`, `origin_providers`, `upstreams`, `wrongness`, `coverage`, and any `override` with its `override_reason`). Ships in the envelope so any record's `resolved_by` is replayable and auditable from the ledger file alone. Unmeasured evidence is `null`, never a guessed zero |
 
 ## `MODEL`
@@ -108,7 +108,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `price` | `PRICE_ENTRY[]` | models.dev, the rest filled from LiteLLM/genai-prices | See below |
 | `price_discrepancies` | `PRICE_DISCREPANCY[]` | Computed during fusion | Empty when sources agree, not `null`. See below |
 | `reasoning` | `REASONING` \| null | models.dev, cross-checked against OpenRouter | Absent, not empty, when the model has no reasoning capability |
-| `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-10", "litellm": "2026-09-10"}`. Fallback-admitted records never list the preferred source, so provenance is filterable |
+| `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-10", "litellm": "2026-09-10"}`. Fallback-admitted records never list the preferred source, so provenance is filterable. A record read from a vendor's own pricing page names that page alone, e.g. `{"deepgram_pricing": "2026-09-26"}` |
 | `lifecycle` | `LIFECYCLE` | models.dev (`status`, `release_date`) + LiteLLM (`deprecation_date`) | See below |
 | `observed_at` | datetime \| absent | Not supplied for AI | A UTC instant recording when this record's underlying value was observed upstream. Absent in the AI domain: list prices are announced, not observed to the second, and no source dates a price that finely. It exists on the record so a domain whose values move continuously (a market price) fills a stricter value into a field already present, rather than a later domain forcing a breaking change to add it. Distinct from the envelope's `snapshot_date` (a release's calendar identity) and from a source's `fetched_at` (when we reached the source): this is when the *value* was true |
 | `alias` | `ALIAS` \| absent | KeyCall's per-provider alias-convention catalog, baked in at ledger-build time | Absent for a dated/pinned id, or a provider with no recorded convention. See below |
@@ -116,6 +116,10 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 ### Why `type` is a separate field from `modalities`
 
 `modalities` describes the content format crossing the wire, text, image, audio, video, file. `type` describes what the API contract does with it. They correlate but neither derives from the other: Cohere's `rerank-english-v2.0` and OpenAI's `omni-moderation-2024-09-26` both show a text-in/text-shaped-out modality, the same shape a chat model has, while being a ranking operation and a classification operation respectively, not a conversation. A schema that only carried `modalities` would have no way to tell those apart from a chat model. (Neither model ships in the current catalog, no source supplies per-unit pricing for them; they're here as the counterexample that rules the derivation out.)
+
+### Origin records
+
+A record read from a vendor's own pricing page (currently the speech vendors: Deepgram, AssemblyAI, ElevenLabs, LiveKit) has the same shape as every other record. Fields a pricing page doesn't publish stay at their absent values, the same reading the schema uses everywhere: `family` and both `context` limits are `null`, `tool_call` and `structured_output` are unknown, `reasoning` is absent. `modalities` follows from the record's `type` (`audio_transcription` is audio in, text out; `audio_speech` the reverse). When a page and a feed both describe the same provider-and-id row, the page's values win: the vendor is the party the ladder's `origin` rung already trusts about its own prices.
 
 ## `PRICE_ENTRY`
 
@@ -129,8 +133,14 @@ Price is a flat map of unit name to rate, never a single blended number, and nev
 | `cache_read_mtok` / `cache_write_mtok` | `claude-opus-5` | $0.50 / $6.25 per million tokens |
 | `requests_kcount` | `sonar` (Perplexity) | $12 per 1,000 requests |
 | `input_audio_mtok` | `gemini-2.5-flash` (aihubmix) | $1 per million audio tokens |
+| `audio_minute` | `nova-3-monolingual` (Deepgram) | $0.0043 per minute of pre-recorded audio |
+| `streaming_audio_minute` | `nova-3-monolingual` (Deepgram) | $0.0048 per minute of streamed audio |
+| `session_minute` | `u3-rt-pro` (AssemblyAI) | $0.0075 per minute of streaming-session time |
+| `kchar` | `aura-2` (Deepgram) | $0.03 per 1,000 characters of input text |
 
 `output_per_second` (per-second media billing) is also in the vocabulary; its current carriers are transcription models priced at zero, so it makes a poor illustration and a fine unit.
+
+The three duration units are deliberately distinct because they count different events. `audio_minute` counts recorded audio processed as a batch; `streaming_audio_minute` counts audio processed over a stream; `session_minute` counts connection time whether or not audio flows (AssemblyAI's own definition of its streaming meter). A vendor's hourly rate becomes a per-minute rate by division, the same counted event in a different denominator; rates across *different* counted events are never converted into each other, since a comparison between them depends on usage assumptions only the caller holds. Each unit an origin parser emits is defined, with a dated per-vendor verification of the counted event, in `UNIT_REGISTRY` (`rates/ai/_origins.py`).
 
 A caller who wants a single comparable number (a "blended $/mtok," say) computes it themselves from the raw units and their own expected usage mix. Baking in a fixed input:output weighting was an earlier design choice, reverted, it assumed a usage ratio that isn't true for every caller.
 

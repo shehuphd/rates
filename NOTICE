@@ -52,6 +52,18 @@ effort, and modality and type coverage the other sources lack. The endpoint
 consumed is the public model catalog at `https://openrouter.ai/api/v1/models`.
 OpenRouter publishes no license file for it; its terms of service govern.
 
+## Vendor pricing pages (origin sources)
+
+Speech-model rates are read directly from the publishing vendor's own public
+pricing page. Each page is that vendor's copyrighted material; `rates` extracts
+only the published prices, model names, and billing units, which state facts
+about the vendor's own offering. No page content is reproduced.
+
+- Deepgram: <https://deepgram.com/pricing>
+- AssemblyAI: <https://www.assemblyai.com/pricing>
+- ElevenLabs: <https://elevenlabs.io/pricing/api>
+- LiveKit: <https://livekit.com/pricing>
+
 ## The MIT license
 
 Applies to models.dev, genai-prices, and LiteLLM as named above.

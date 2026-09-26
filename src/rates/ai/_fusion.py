@@ -29,9 +29,10 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from .._errors import AllSourcesUnreachableError, PreferredSourceUnavailableError
-from .._http import FetchError, fetch_json
+from .._http import FetchError, fetch_json, fetch_text
 from .._resolution import LADDER, Candidate, SourceCard, resolve
 from .._trace import traced
+from ._origins import ORIGIN_CARDS, ORIGIN_URLS, normalize_origins
 from ._sources import (
     SOURCE_CARDS,
     SOURCE_URLS,
@@ -45,7 +46,7 @@ from ._sources import (
 # observed_at) are UTC instants; a day-only value in any earlier local ledger
 # still reads, floored to midnight UTC. _schema_compatible checks the major, so
 # a later additive field bumps the minor without breaking an older reader.
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 DISCREPANCY_THRESHOLD_PCT = 2.0
 
 # The declared strict total order over sources, derived from the
@@ -72,6 +73,7 @@ _ROLES = {
     "genai_prices": "validation",
     "litellm": "fallback",
     "openrouter": "fallback",
+    **{name: "origin" for name in ORIGIN_URLS},
 }
 
 
@@ -113,6 +115,17 @@ def fetch_sources(
             "result built from the fallbacks alone would be missing most "
             "fields, so none is returned."
         )
+
+    # Origin pages: each vendor's own published pricing, per-source
+    # degradation like the feeds. None is ever the preferred source, so
+    # a failure here can't fail the fusion.
+    for name, url in ORIGIN_URLS.items():
+        try:
+            payloads[name] = fetch_text(url, timeout=timeout)
+            statuses[name] = "ok"
+        except FetchError:
+            payloads[name] = None
+            statuses[name] = "unreachable"
     return payloads, statuses
 
 
@@ -178,7 +191,33 @@ def fuse(
             normalized, preferred_keys=set(normalized["models_dev"]), today=today
         )
     )
-    models.sort(key=lambda m: (m["provider"], m["id"]))
+
+    # Origin rows: vendors the feeds don't carry, from their own pages.
+    # On the one key both report, the origin row stands, the ladder's
+    # origin rung applied at record grain (the horse's mouth speaking
+    # about its own product).
+    origin_records, parse_statuses = normalize_origins(payloads, today)
+    origin_statuses = {
+        name: (
+            parse_statuses.get(name, "suspect")
+            if statuses.get(name) == "ok"
+            else statuses.get(name, "unreachable")
+        )
+        for name in ORIGIN_URLS
+    }
+    by_key = {(m["provider"], m["id"]): m for m in models}
+    by_key.update({(m["provider"], m["id"]): m for m in origin_records})
+    models = sorted(by_key.values(), key=lambda m: (m["provider"], m["id"]))
+
+    origin_by_source: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+    for record in origin_records:
+        source = next(iter(record["sources"]))
+        origin_by_source.setdefault(source, {})[
+            (record["provider"], record["id"])
+        ] = record
+    origin_cards = _cards_with_coverage(
+        {**normalized, **origin_by_source}, cards=ORIGIN_CARDS
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -192,13 +231,27 @@ def fuse(
                 "status": statuses.get(name, "unreachable"),
             }
             for name in SOURCE_URLS
+        ]
+        + [
+            {
+                "name": name,
+                "fetched_at": (
+                    fetched_instant if statuses.get(name) == "ok" else None
+                ),
+                "role": "origin",
+                "status": origin_statuses[name],
+            }
+            for name in ORIGIN_URLS
         ],
         # The resolution machinery this build was decided with: the rung
         # order and each source's scorecard as consulted, so any record's
         # resolution is replayable from the ledger file alone.
         "resolution": {
             "ladder": list(LADDER),
-            "sources": {name: card.to_dict() for name, card in cards.items()},
+            "sources": {
+                name: card.to_dict()
+                for name, card in {**cards, **origin_cards}.items()
+            },
         },
         "models": models,
     }
@@ -206,6 +259,7 @@ def fuse(
 
 def _cards_with_coverage(
     normalized: dict[str, dict[tuple[str, str], dict[str, Any]]],
+    cards: dict[str, SourceCard] | None = None,
 ) -> dict[str, SourceCard]:
     """This build's scorecards: the declared standing plus per-run
     coverage, the fraction of this build's input records each source
@@ -217,7 +271,7 @@ def _cards_with_coverage(
     total = len(universe) or 1
     return {
         name: replace(card, coverage=round(len(normalized.get(name, {})) / total, 4))
-        for name, card in SOURCE_CARDS.items()
+        for name, card in (cards if cards is not None else SOURCE_CARDS).items()
     }
 
 

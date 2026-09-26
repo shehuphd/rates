@@ -1,0 +1,262 @@
+"""Origin page sources: parsers against recorded fixtures, shape
+qualification on hostile input, and the fusion's origin admission.
+
+Fixtures under tests/fixtures/origins are trimmed captures of the live
+pages (2026-09-26); the live-drift twin of these tests is
+tests/test_origin_probes.py.
+"""
+
+import math
+from pathlib import Path
+
+import pytest
+
+from rates.ai._fusion import fuse
+from rates.ai._origins import (
+    ORIGIN_CARDS,
+    ORIGIN_PROVIDERS,
+    ORIGIN_URLS,
+    UNIT_REGISTRY,
+    normalize_origins,
+    parse_assemblyai,
+    parse_deepgram,
+    parse_elevenlabs,
+    parse_livekit,
+)
+
+FIXTURES = Path(__file__).parent / "fixtures" / "origins"
+TODAY = "2026-09-26"
+
+
+def _page(name: str) -> str:
+    return (FIXTURES / name).read_text()
+
+
+def _minimal_feeds() -> dict:
+    return {
+        "models_dev": {
+            "anthropic": {
+                "models": {
+                    "claude-x": {
+                        "cost": {"input": 1, "output": 2},
+                        "limit": {},
+                        "modalities": {},
+                    }
+                }
+            }
+        },
+        "genai_prices": [],
+        "litellm": {},
+        "openrouter": {},
+    }
+
+
+# Hostile and degenerate input first.
+
+
+@pytest.mark.parametrize(
+    "parse", [parse_deepgram, parse_assemblyai, parse_elevenlabs, parse_livekit]
+)
+@pytest.mark.parametrize(
+    "page",
+    ["", "no prices here", "<html><body>$0.0043/min</body></html>", "| a | b |"],
+)
+def test_parsers_yield_nothing_on_unrecognized_pages(parse, page):
+    assert parse(page, TODAY) == []
+
+
+def test_deepgram_garbled_offer_json_yields_nothing():
+    page = (
+        '<script id="product-offer-schema" type="application/ld+json">'
+        '{"offers": [{"name": "X - Streaming - Nova-3 - Pay As You Go",'
+        '</script>'
+    )
+    assert parse_deepgram(page, TODAY) == []
+
+
+def test_deepgram_refuses_negative_zero_and_absurd_rates():
+    def offer(price):
+        return (
+            '<script id="product-offer-schema" type="application/ld+json">'
+            '{"offers": [{"name": "X - Streaming - Nova-3 - Pay As You Go",'
+            f'"price": "{price}", "priceCurrency": "USD"}}]}}</script>'
+        )
+
+    for bad in ("0", "-0.004", "1000000", "abc"):
+        assert parse_deepgram(offer(bad), TODAY) == [], bad
+
+
+def test_normalize_origins_marks_an_unparsable_fetched_page_suspect():
+    payloads = {name: "fetched but wrong shape" for name in ORIGIN_URLS}
+    records, statuses = normalize_origins(payloads, TODAY)
+    assert records == []
+    assert statuses == {name: "suspect" for name in ORIGIN_URLS}
+
+
+def test_normalize_origins_skips_unfetched_pages_without_status():
+    records, statuses = normalize_origins({"deepgram_pricing": None}, TODAY)
+    assert records == [] and statuses == {}
+
+
+# The recorded pages.
+
+
+def test_deepgram_fixture_yields_stt_and_tts_and_nothing_else():
+    records = parse_deepgram(_page("deepgram.html"), TODAY)
+    by_id = {r["id"]: r for r in records}
+    # Batch and streaming rates are two units on one record.
+    nova = by_id["nova-3-monolingual"]
+    assert nova["type"] == "audio_transcription"
+    assert nova["price"]["audio_minute"] == 0.0043
+    assert nova["price"]["streaming_audio_minute"] == 0.0048
+    # Whisper is batch-only on the page, so no streaming unit appears.
+    assert "streaming_audio_minute" not in by_id["whisper-large"]["price"]
+    assert by_id["aura-2"] == {
+        **by_id["aura-2"],
+        "type": "audio_speech",
+        "price": {"currency": "USD", "kchar": 0.03},
+    }
+    # Add-on rates (redaction, diarization), agent bundles, and Growth
+    # plan prices never become records.
+    assert not {"redaction", "speaker-diarization", "standard"} & set(by_id)
+    assert all(r["provider"] == "deepgram" for r in records)
+
+
+def test_assemblyai_fixture_splits_audio_and_session_meters():
+    records = parse_assemblyai(_page("assemblyai.md"), TODAY)
+    by_id = {r["id"]: r for r in records}
+    # Hourly rates become per-minute rates by denominator arithmetic.
+    assert by_id["universal-2"]["price"]["audio_minute"] == pytest.approx(
+        0.15 / 60
+    )
+    # Streaming bills the session, the page's own wording, so its unit
+    # is connection time, never audio time.
+    assert by_id["u3-rt-pro"]["price"] == {
+        "currency": "USD",
+        "session_minute": pytest.approx(0.45 / 60),
+    }
+    # The priceless deprecated row and the voice-agent bundle stay out.
+    assert "slam-1" not in by_id
+    assert not any("agent" in model_id for model_id in by_id)
+
+
+def test_elevenlabs_fixture_keeps_speech_and_drops_the_rest():
+    records = parse_elevenlabs(_page("elevenlabs.md"), TODAY)
+    by_id = {r["id"]: r for r in records}
+    assert by_id["v3"]["price"] == {"currency": "USD", "kchar": 0.1}
+    assert by_id["scribe-v2"]["price"]["audio_minute"] == pytest.approx(
+        0.22 / 60
+    )
+    # Realtime's page entry doesn't state what its hour counts; no row.
+    assert "scribe-v2-realtime" not in by_id
+    # Agents, music, dubbing, and audio processing aren't speech records.
+    types = {r["type"] for r in records}
+    assert types == {"audio_speech", "audio_transcription"}
+
+
+def test_livekit_fixture_keeps_entry_plan_stt_only():
+    records = parse_livekit(_page("livekit.html"), TODAY)
+    by_id = {r["id"]: r for r in records}
+    assert by_id["deepgram-nova-3-monolingual"]["price"] == {
+        "currency": "USD",
+        "streaming_audio_minute": 0.0048,
+    }
+    # TTS and LLM per-minute figures display character- and token-billed
+    # models, so no such rows exist; Scale-plan rates don't either
+    # (Nova-3 monolingual on Scale is 0.0042).
+    assert all(r["type"] == "audio_transcription" for r in records)
+    rates = {
+        r["price"]["streaming_audio_minute"]
+        for r in records
+        if r["id"] == "deepgram-nova-3-monolingual"
+    }
+    assert rates == {0.0048}
+
+
+def test_every_emitted_unit_is_registered_with_a_vendor_verification():
+    pages = {
+        "deepgram_pricing": _page("deepgram.html"),
+        "assemblyai_pricing": _page("assemblyai.md"),
+        "elevenlabs_pricing": _page("elevenlabs.md"),
+        "livekit_pricing": _page("livekit.html"),
+    }
+    records, statuses = normalize_origins(pages, TODAY)
+    assert statuses == {name: "ok" for name in ORIGIN_URLS}
+    for record in records:
+        provider = record["provider"]
+        for unit in record["price"]:
+            if unit == "currency":
+                continue
+            entry = UNIT_REGISTRY[unit]
+            assert provider in entry["verified"], (
+                f"{provider} emits {unit} without a dated verification "
+                "of the counted event in UNIT_REGISTRY"
+            )
+            assert not math.isnan(record["price"][unit])
+
+
+def test_origin_cards_are_first_party_for_their_own_provider_only():
+    for name, card in ORIGIN_CARDS.items():
+        assert card.origin_providers == (ORIGIN_PROVIDERS[name],)
+        assert card.registry_rank >= 4  # feeds keep the declared front ranks
+
+
+# Fusion integration.
+
+
+def test_fuse_admits_origin_records_and_marks_the_envelope():
+    payloads = {
+        **_minimal_feeds(),
+        "deepgram_pricing": _page("deepgram.html"),
+        "assemblyai_pricing": _page("assemblyai.md"),
+        "elevenlabs_pricing": _page("elevenlabs.md"),
+        "livekit_pricing": _page("livekit.html"),
+    }
+    out = fuse(payloads)
+    providers = {m["provider"] for m in out["models"]}
+    assert {"deepgram", "assemblyai", "elevenlabs", "livekit"} <= providers
+    rows = {s["name"]: s for s in out["sources"]}
+    for name in ORIGIN_URLS:
+        assert rows[name]["role"] == "origin"
+        assert rows[name]["status"] == "ok"
+        assert rows[name]["fetched_at"] is not None
+    assert set(out["resolution"]["sources"]) >= set(ORIGIN_CARDS)
+    # Origin rows carry their page as their only source, dated today.
+    sample = next(m for m in out["models"] if m["provider"] == "elevenlabs")
+    assert list(sample["sources"]) == ["elevenlabs_pricing"]
+
+
+def test_fuse_without_origin_payloads_reports_them_unreachable():
+    out = fuse(_minimal_feeds())
+    rows = {s["name"]: s for s in out["sources"]}
+    for name in ORIGIN_URLS:
+        assert rows[name]["status"] == "unreachable"
+        assert rows[name]["fetched_at"] is None
+    assert all(m["provider"] == "anthropic" for m in out["models"])
+
+
+def test_fuse_marks_a_fetched_but_unparsable_origin_suspect():
+    payloads = {**_minimal_feeds(), "deepgram_pricing": "<html>redesigned</html>"}
+    statuses = {name: "ok" for name in payloads}
+    out = fuse(payloads, statuses)
+    row = next(s for s in out["sources"] if s["name"] == "deepgram_pricing")
+    assert row["status"] == "suspect"
+    # A suspect source contributes nothing, and the run still succeeds.
+    assert not any(m["provider"] == "deepgram" for m in out["models"])
+
+
+def test_an_origin_row_survives_registry_round_trip():
+    from rates.ai._registry import Registry
+
+    payloads = {**_minimal_feeds(), "assemblyai_pricing": _page("assemblyai.md")}
+    statuses = {name: "ok" for name in payloads}
+    registry = Registry.from_dict(fuse(payloads, statuses))
+    hits = registry.filter(provider="assemblyai")
+    assert {m.id for m in hits} == {
+        "universal-3-5-pro",
+        "universal-2",
+        "u3-rt-pro",
+        "universal-streaming-english",
+        "universal-streaming-multilingual",
+    }
+    assert all(m.type == "audio_transcription" for m in hits)

@@ -76,12 +76,15 @@ def _identity(url: str) -> str:
 
 def test_notice_covers_every_upstream_source():
     # Every source the fusion fetches contributes to the ledger shipped in
-    # the wheel, so each one's attribution has to ship with it. A fifth
-    # source added without a NOTICE entry fails here.
+    # the wheel, so each one's attribution has to ship with it: the four
+    # feeds and every origin pricing page alike. A source added without a
+    # NOTICE entry fails here.
+    from rates.ai._origins import ORIGIN_URLS
     from rates.ai._sources import SOURCE_URLS
 
     notice = (ROOT / "NOTICE").read_text()
-    missing = [url for url in SOURCE_URLS.values() if _identity(url) not in notice]
+    fetched = list(SOURCE_URLS.values()) + list(ORIGIN_URLS.values())
+    missing = [url for url in fetched if _identity(url) not in notice]
     assert not missing, (
         f"NOTICE doesn't attribute every source the fusion fetches: {missing}"
     )

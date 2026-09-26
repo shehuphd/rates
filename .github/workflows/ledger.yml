@@ -32,12 +32,29 @@ jobs:
         env:
           RATES_LIVE_PROBES: "1"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python -m pytest tests/test_source_probes.py tests/test_keycall_probe.py -q
+        run: python -m pytest tests/test_source_probes.py tests/test_keycall_probe.py tests/test_origin_probes.py -q
 
       - name: Build ledger
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python scripts/build_ledger.py
+
+      # Extraction-fidelity check on the origin rows: Jev judges whether
+      # each parsed rate is stated by its page. Advisory by design (the
+      # script exits zero); a run without the secret skips it, so forks
+      # and keyless dispatches never fail here. Spend rows print into the
+      # job log since the runner's filesystem is discarded.
+      - name: Jev origin fidelity check
+        env:
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: |
+          if [ -z "$TYPESAFE_API_KEY" ]; then
+            echo "TYPESAFE_API_KEY secret isn't set; skipping"
+            exit 0
+          fi
+          python -m pip install typesafe-sdk
+          python scripts/jev_check.py
+          cat project/jev-spend.jsonl 2>/dev/null || true
 
       # Rewrite the exact count samples in the docs to the rebuilt ledger
       # before the test suite runs its docs-count guard, so a refreshed

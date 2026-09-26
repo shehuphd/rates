@@ -21,9 +21,45 @@ import keycall
 
 from rates.ai._freshness import gather_source_freshness, record_freshness_lookup
 from rates.ai._fusion import fetch_sources, fuse
+from rates.ai._origins import ORIGIN_PROVIDERS
 from rates.ai._sources import normalize_models_dev
 
 ROOT = Path(__file__).resolve().parent.parent
+
+
+def _origin_delta_report(fused: dict[str, Any]) -> None:
+    """Qualification step two, advisory: how each origin provider's rows
+    moved against the previous bundled snapshot. A vanished model, a new
+    one, or a changed rate prints here so a parser drifting into wrong
+    bindings is read by a person, not shipped in silence; nothing blocks,
+    since a route to blocking needs a signed threshold first."""
+    bundled = ROOT / "src" / "rates" / "ai" / "ledger-ai.json.gz"
+    try:
+        previous = json.loads(gzip.decompress(bundled.read_bytes()))
+    except (OSError, ValueError):
+        return
+
+    def rows(ledger: dict[str, Any], provider: str) -> dict[str, dict[str, Any]]:
+        return {
+            m["id"]: {k: v for k, v in m["price"].items() if k != "currency"}
+            for m in ledger["models"]
+            if m["provider"] == provider
+        }
+
+    for provider in sorted(ORIGIN_PROVIDERS.values()):
+        old, new = rows(previous, provider), rows(fused, provider)
+        if not old and not new:
+            continue
+        for model_id in sorted(set(old) - set(new)):
+            print(f"origin delta: {provider}/{model_id} vanished (had {old[model_id]})")
+        for model_id in sorted(set(new) - set(old)):
+            print(f"origin delta: {provider}/{model_id} is new ({new[model_id]})")
+        for model_id in sorted(set(old) & set(new)):
+            if old[model_id] != new[model_id]:
+                print(
+                    f"origin delta: {provider}/{model_id} moved "
+                    f"{old[model_id]} -> {new[model_id]}"
+                )
 
 
 def _resolve_alias(provider: str, model_id: str) -> dict[str, Any] | None:
@@ -56,9 +92,14 @@ def main() -> int:
         record_freshness=record_freshness_lookup(),
     )
 
-    unreachable = [n for n, s in statuses.items() if s != "ok"]
-    if unreachable:
-        print(f"warning: sources unreachable this run: {', '.join(unreachable)}")
+    degraded = [
+        f"{s['name']} ({s['status']})"
+        for s in fused["sources"]
+        if s["status"] != "ok"
+    ]
+    if degraded:
+        print(f"warning: sources degraded this run: {', '.join(degraded)}")
+    _origin_delta_report(fused)
 
     aliased = 0
     for model in fused["models"]:

@@ -26,11 +26,13 @@ Desktop.ini
 # Internal documentation (top-level project docs stay tracked).
 *.md
 !README.md
+!MANIFEST.md
 !USAGE.md
 !ARCHITECTURE.md
 !ERD.md
 !CHANGELOG.md
 !CONTRIBUTING.md
+!tests/fixtures/origins/*.md
 
 # Python build/runtime artifacts.
 __pycache__/

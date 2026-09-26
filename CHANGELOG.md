@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.1.0 (2026-09-26)
+
+### Added
+
+- Origin page sources: speech-model rates read directly from the publishing vendor's own pricing page, a category no aggregator feed carries. Four vendors ship in this release, Deepgram, AssemblyAI, ElevenLabs, and LiveKit, contributing 39 transcription and speech-synthesis records. An origin record has the same schema as a feed record, names its page as its only source, and wins any row it shares with a feed through the resolution ladder's origin rung. See ARCHITECTURE.md § Origin pages.
+- Four price units for duration- and character-billed models: `audio_minute` (pre-recorded audio), `streaming_audio_minute` (streamed audio), `session_minute` (streaming-connection time, AssemblyAI's own meter), and `kchar` (per 1,000 characters). Each unit's counted event is defined, with a dated per-vendor verification, in the unit registry (`rates/ai/_origins.py`), and the three duration units never convert into one another.
+- An `origin` source role and a `suspect` source status in the registry envelope. A pricing page that was fetched but yielded no records reports `suspect` and contributes nothing, so a vendor's page redesign degrades one source instead of shipping wrong rows.
+- Origin-page drift probes in the weekly ledger workflow, an advisory per-provider delta report in each build (vanished, new, and moved rows against the previous snapshot), and an optional advisory extraction-fidelity check (`scripts/jev_check.py`, maintainer/CI tooling) that asks TypeSafe's Jev whether each extracted rate is stated by its page.
+
+### Changed
+
+- Ledger `schema_version` moves to 1.1.0 for the additive vocabulary above (the `origin` role, the `suspect` status, the speech units). A reader of 1.0.0 ledgers still loads it; no field changed shape.
+
 ## 1.0.2 (2026-09-10)
 
 ### Added

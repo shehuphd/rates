@@ -96,6 +96,41 @@ def fetch_json(
     raise AssertionError("unreachable: the final attempt always raises or returns")
 
 
+def fetch_text(
+    url: str,
+    timeout: float | None = None,
+    accept: str = "text/markdown;q=1.0, text/html;q=0.5",
+) -> str:
+    """GET a URL and return its body as text, preferring markdown.
+
+    Same ladder, backoff, and failure contract as ``fetch_json``. The
+    Accept header asks for markdown first: several vendors serve their
+    pricing pages as ``text/markdown`` on content negotiation, which
+    spares the parser the HTML. A server that ignores the header serves
+    HTML and the per-source parser handles that form.
+    """
+    caller = validate_timeout(timeout)
+    rungs = [max(r, caller) if caller is not None else r for r in TIMEOUT_LADDER]
+    final = len(rungs) - 1
+
+    for attempt, rung in enumerate(rungs):
+        try:
+            body = _get(url, rung, token=None, accept=accept)
+        except urllib.error.HTTPError as exc:
+            if exc.code in TRANSIENT_STATUSES and attempt < final:
+                _sleep(_retry_delay(attempt, exc.headers.get("Retry-After")))
+                continue
+            raise FetchError(f"{url}: HTTP {exc.code}") from exc
+        except (TimeoutError, urllib.error.URLError) as exc:
+            if attempt < final:
+                _sleep(BACKOFF_SECONDS[attempt])
+                continue
+            raise FetchError(f"{url}: unreachable ({exc})") from exc
+        return body.decode("utf-8", errors="replace")
+
+    raise AssertionError("unreachable: the final attempt always raises or returns")
+
+
 def _retry_delay(attempt: int, retry_after: str | None) -> float:
     """Backoff before the next attempt: the ladder's pause, or the server's
     Retry-After when it asks for longer, capped so a hostile or broken
@@ -109,8 +144,13 @@ def _retry_delay(attempt: int, retry_after: str | None) -> float:
     return min(delay, RETRY_AFTER_CAP)
 
 
-def _get(url: str, timeout: float, token: str | None) -> bytes:
-    headers = {"User-Agent": _USER_AGENT, "Accept": "application/json"}
+def _get(
+    url: str,
+    timeout: float,
+    token: str | None,
+    accept: str = "application/json",
+) -> bytes:
+    headers = {"User-Agent": _USER_AGENT, "Accept": accept}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(url, headers=headers)

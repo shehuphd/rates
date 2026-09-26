@@ -568,7 +568,14 @@ def test_build_ledger_writes_both_artifacts(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(module, "record_freshness_lookup", lambda timeout=None: None)
     monkeypatch.setattr(
         module, "fuse",
-        lambda payloads, statuses, **kwargs: {"snapshot_date": "2026-08-23", "models": []},
+        lambda payloads, statuses, **kwargs: {
+            "snapshot_date": "2026-08-23",
+            "sources": [
+                {"name": "models_dev", "status": "ok"},
+                {"name": "litellm", "status": "unreachable"},
+            ],
+            "models": [],
+        },
     )
     assert module.main() == 0
     out = capsys.readouterr().out
@@ -660,6 +667,7 @@ def test_build_ledger_bakes_alias_facts_into_models(tmp_path, monkeypatch):
         module, "fuse",
         lambda payloads, statuses, **kwargs: {
             "snapshot_date": "2026-08-23",
+            "sources": [],
             "models": [
                 {"provider": "google", "id": "gemini-pro-latest", "sources": {"models_dev": "2026-08-23"}},
                 {"provider": "anthropic", "id": "claude-opus-5", "sources": {"models_dev": "2026-08-23"}},
