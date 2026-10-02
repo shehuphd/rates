@@ -1,14 +1,15 @@
-"""A small stdlib HTTP helper for sync and live.
+"""A small stdlib HTTP helper for stable and live.
 
 Hand-rolled on urllib so the package carries no HTTP dependency: the whole
-job is a handful of sequential JSON GETs, none of the pooling, streaming,
-or HTTP/2 a client library would add.
+job is a handful of sequential GETs (JSON feeds and a few pricing pages
+as text), none of the pooling, streaming, or HTTP/2 a client library
+would add.
 
 Retry policy: the slow connection is the design case, not the edge case,
 so the timeout ladder starts generous (a first attempt short enough to
 save a fast user a few seconds would guarantee-fail the slow user these
 numbers are for) and escalates from there. Server-side transient failures
-(429, 5xx) retry with backoff, since those resolve on the server's
+(429, 500, 502, 503, 504) retry with backoff, since those resolve on the server's
 schedule. Clean errors (404, malformed JSON) never retry; no wait fixes
 those. A volatile domain (forex, say) can later override the ladder and
 statuses as its own profile; the mechanism stays this one.
@@ -16,6 +17,7 @@ statuses as its own profile; the mechanism stays this one.
 
 from __future__ import annotations
 
+import http.client
 import json
 import time
 import urllib.error
@@ -35,9 +37,9 @@ _sleep = time.sleep
 
 
 class FetchError(Exception):
-    """A URL couldn't be fetched or didn't return usable JSON. Carries the
-    reason; callers classify it per-source rather than letting transport
-    details leak upward."""
+    """A URL couldn't be fetched, or a JSON fetch returned an unusable
+    body. Carries the reason; callers classify it per-source rather than
+    letting transport details leak upward."""
 
 
 def validate_timeout(timeout: float | None) -> float | None:
@@ -65,8 +67,9 @@ def fetch_json(
     timeout above a rung replaces that rung). Timeouts, connection errors,
     and transient HTTP statuses (429, 500, 502, 503, 504) retry with a
     short backoff pause, honoring a Retry-After header up to a cap. Clean
-    error responses and malformed JSON never retry. Raises FetchError with
-    the reason when every attempt fails.
+    error responses, malformed JSON, and an invalid URL never retry.
+    Every failure raises FetchError with the reason: on the first attempt
+    for a failure no retry fixes, otherwise when the last attempt fails.
     """
     caller = validate_timeout(timeout)
     rungs = [max(r, caller) if caller is not None else r for r in TIMEOUT_LADDER]
@@ -80,15 +83,19 @@ def fetch_json(
                 _sleep(_retry_delay(attempt, exc.headers.get("Retry-After")))
                 continue
             raise FetchError(f"{url}: HTTP {exc.code}") from exc
-        except (TimeoutError, urllib.error.URLError) as exc:
+        except (TimeoutError, OSError, http.client.HTTPException) as exc:
+            # OSError covers URLError and dropped connections;
+            # HTTPException covers a truncated or garbled response.
             if attempt < final:
                 _sleep(BACKOFF_SECONDS[attempt])
                 continue
             raise FetchError(f"{url}: unreachable ({exc})") from exc
+        except ValueError as exc:
+            raise FetchError(f"{url}: not a fetchable URL ({exc})") from exc
 
         try:
             return json.loads(body)
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:  # malformed JSON or a body that isn't UTF-8
             raise FetchError(
                 f"{url}: response wasn't valid JSON ({exc})"
             ) from exc
@@ -103,7 +110,9 @@ def fetch_text(
 ) -> str:
     """GET a URL and return its body as text, preferring markdown.
 
-    Same ladder, backoff, and failure contract as ``fetch_json``. The
+    Same ladder, backoff, and failure contract as ``fetch_json``, except
+    that a body that isn't UTF-8 is decoded with replacement characters
+    rather than refused, and left to the page's parser. The
     Accept header asks for markdown first: several vendors serve their
     pricing pages as ``text/markdown`` on content negotiation, which
     spares the parser the HTML. A server that ignores the header serves
@@ -121,11 +130,15 @@ def fetch_text(
                 _sleep(_retry_delay(attempt, exc.headers.get("Retry-After")))
                 continue
             raise FetchError(f"{url}: HTTP {exc.code}") from exc
-        except (TimeoutError, urllib.error.URLError) as exc:
+        except (TimeoutError, OSError, http.client.HTTPException) as exc:
+            # OSError covers URLError and dropped connections;
+            # HTTPException covers a truncated or garbled response.
             if attempt < final:
                 _sleep(BACKOFF_SECONDS[attempt])
                 continue
             raise FetchError(f"{url}: unreachable ({exc})") from exc
+        except ValueError as exc:
+            raise FetchError(f"{url}: not a fetchable URL ({exc})") from exc
         return body.decode("utf-8", errors="replace")
 
     raise AssertionError("unreachable: the final attempt always raises or returns")

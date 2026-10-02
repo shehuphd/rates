@@ -1,7 +1,7 @@
 """The fusion engine: one merge, two invocations.
 
-``fuse()`` is a pure function over already-fetched payloads and, when
-supplied, already-fetched freshness data, the same merge whether run on
+``fuse()`` merges already-fetched payloads, consulting freshness evidence
+when it's supplied, the same merge whether run on
 our weekly schedule to produce a published ledger or by a caller's own
 process via ``load(fetch="live")``. ``fetch_sources()`` does the payload
 network half, degrading per source rather than failing whole; freshness
@@ -19,6 +19,11 @@ every carrier, ships the winner's value, and records every carrier
 still past the threshold from the shipped value as a
 ``price_discrepancies`` note, ``resolved_by`` naming the rung that
 decided. OpenRouter fills missing modalities and carries no prices.
+
+Origin rows (``_origins.py``) join after that merge: each vendor
+pricing page's records are admitted whole, and a page record replaces
+a feed record with the same provider and id outright, with no
+discrepancy note, since the page is the vendor's own statement.
 """
 
 from __future__ import annotations
@@ -42,7 +47,7 @@ from ._sources import (
     normalize_openrouter,
 )
 
-# The first shipped schema. Provenance timestamps (source fetched_at, record
+# Provenance timestamps (source fetched_at, record
 # observed_at) are UTC instants; a day-only value in any earlier local ledger
 # still reads, floored to midnight UTC. _schema_compatible checks the major, so
 # a later additive field bumps the minor without breaking an older reader.
@@ -106,7 +111,7 @@ def fetch_sources(
 
     if all(status != "ok" for status in statuses.values()):
         raise AllSourcesUnreachableError(
-            f"none of the {len(SOURCE_URLS)} sources could be reached. "
+            f"none of the {len(SOURCE_URLS)} feeds could be reached. "
             f"Last failure: {last_error}"
         )
     if statuses["models_dev"] != "ok":
@@ -138,20 +143,21 @@ def fuse(
 ) -> dict[str, Any]:
     """Merge fetched payloads into one registry dict in ERD.md's shape.
 
-    Pure: no network of its own, no clock beyond stamping today's
-    snapshot date. ``source_freshness`` (a plain dict) and
-    ``record_freshness`` (a callable) are optional pre-fetched inputs
-    consulted only by the ladder's freshness rung, and only for a
-    contested unit; the network call each represents, when there is one,
-    already happened before ``fuse()`` was called. Neither supplied
+    No network of its own, no clock beyond stamping today's snapshot
+    date. ``source_freshness`` (a plain dict, fetched before the call)
+    and ``record_freshness`` (a callable) are optional inputs consulted
+    only by the ladder's freshness rung, and only for a contested unit.
+    The callable is the one place a network call can happen during a
+    fusion: the lookup the caller supplies is lazy, bounded, and cached,
+    and runs when a contested record needs it. Neither supplied
     means the freshness rung can't rank and falls through (see
     ``rates._resolution``). A payload of None (source skipped)
-    contributes nothing and its status travels in the envelope.
+    contributes nothing and its status is recorded in the envelope.
     """
     statuses = statuses or {name: "ok" for name in payloads}
     now = datetime.now(timezone.utc)
     today = now.date().isoformat()
-    # snapshot_date is the daily snapshot's calendar identity (a date);
+    # snapshot_date is the dated snapshot's calendar identity (a date);
     # a source fetch is an event, stamped as a UTC instant.
     fetched_instant = now.isoformat()
 
@@ -192,10 +198,11 @@ def fuse(
         )
     )
 
-    # Origin rows: vendors the feeds don't carry, from their own pages.
-    # On the one key both report, the origin row stands, the ladder's
-    # origin rung applied at record grain (the horse's mouth speaking
-    # about its own product).
+    # Origin rows: vendors the feeds give the fusion no records for,
+    # from their own pages.
+    # On a key both report, the origin row replaces the feed row whole:
+    # the vendor's own statement of its price, with no ladder run and
+    # no discrepancy note.
     origin_records, parse_statuses = normalize_origins(payloads, today)
     origin_statuses = {
         name: (

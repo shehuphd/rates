@@ -51,7 +51,7 @@ def _valid_criteria() -> list[str]:
 @dataclass(frozen=True)
 class Source:
     """One upstream source consulted for a release, with its role and
-    whether it could be reached. ``fetched_at`` is a UTC instant, the event
+    status (reached, unreachable, or reached but yielding no records). ``fetched_at`` is a UTC instant, the event
     of reaching the source; a day-granular value in an older ledger reads as
     that day's midnight UTC."""
 
@@ -176,7 +176,7 @@ class Registry:
     def sort_by(self, field_name: str, *, descending: bool) -> Registry:
         """Order models by one field, direction stated explicitly.
 
-        ``field_name`` is a model attribute (``"id"``, ``"provider"``) or a
+        ``field_name`` is ``"id"``, ``"provider"``, ``"family"``, ``"type"``, or a
         price unit as ``"price.<unit>"`` (``"price.input_mtok"``). Models
         without a value for the field go last, in either direction.
         """

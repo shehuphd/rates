@@ -1,7 +1,7 @@
 """Origin page sources: parsers against recorded fixtures, shape
 qualification on hostile input, and the fusion's origin admission.
 
-Fixtures under tests/fixtures/origins are trimmed captures of the live
+Fixtures under tests/fixtures/origins are reduced extracts of the live
 pages (2026-09-26); the live-drift twin of these tests is
 tests/test_origin_probes.py.
 """
@@ -91,6 +91,30 @@ def test_normalize_origins_marks_an_unparsable_fetched_page_suspect():
     records, statuses = normalize_origins(payloads, TODAY)
     assert records == []
     assert statuses == {name: "suspect" for name in ORIGIN_URLS}
+
+
+@pytest.mark.parametrize(
+    ("name", "page"),
+    [
+        ("deepgram_pricing", (
+            '<script id="product-offer-schema" type="application/ld+json">'
+            '[{"offers": []}]</script>'
+        )),
+        ("deepgram_pricing", (
+            '<script id="product-offer-schema" type="application/ld+json">'
+            '{"offers": ["x"]}</script>'
+        )),
+        ("assemblyai_pricing",
+         "## Pre-recorded\n| Universal | `universal-2` | **$0.1.5/hr** |\n"),
+        ("elevenlabs_pricing", "### Scribe v2\nSpeech to Text\n$0.2.2\nPrice per hour\n"),
+        ("livekit_pricing", (
+            "<h3>STT model prices Build/Ship plan</h3><ul><li>Foo: $./min</li></ul>"
+        )),
+    ],
+)
+def test_a_page_that_makes_its_parser_raise_is_marked_suspect(name, page):
+    records, statuses = normalize_origins({name: page}, TODAY)
+    assert records == [] and statuses == {name: "suspect"}
 
 
 def test_normalize_origins_skips_unfetched_pages_without_status():
@@ -243,6 +267,38 @@ def test_fuse_marks_a_fetched_but_unparsable_origin_suspect():
     assert row["status"] == "suspect"
     # A suspect source contributes nothing, and the run still succeeds.
     assert not any(m["provider"] == "deepgram" for m in out["models"])
+
+
+def test_an_origin_row_replaces_a_feed_row_with_the_same_key_whole():
+    # A feed carrying the vendor's own model at another price: the page's
+    # record stands in its place, with the page as its only source and no
+    # discrepancy note, and nothing of the feed's record survives.
+    feeds = _minimal_feeds()
+    feeds["models_dev"]["deepgram"] = {
+        "models": {
+            "aura-2": {
+                "cost": {"input": 9, "output": 9},
+                "limit": {"context": 1234},
+                "modalities": {},
+                "family": "from-the-feed",
+            }
+        }
+    }
+    payloads = {**feeds, "deepgram_pricing": _page("deepgram.html")}
+    statuses = {name: "ok" for name in payloads}
+    out = fuse(payloads, statuses)
+    rows = [m for m in out["models"] if (m["provider"], m["id"]) == ("deepgram", "aura-2")]
+    assert len(rows) == 1
+    (row,) = rows
+    assert row["price"] == {"currency": "USD", "kchar": 0.03}
+    assert row["sources"] == {"deepgram_pricing": out["snapshot_date"]}
+    assert row["price_discrepancies"] == []
+    assert row["family"] is None
+
+    # Without the page, the feed's row is what ships.
+    out = fuse(feeds, {name: "ok" for name in feeds})
+    (row,) = [m for m in out["models"] if m["provider"] == "deepgram"]
+    assert row["price"]["input_mtok"] == 9 and "models_dev" in row["sources"]
 
 
 def test_an_origin_row_survives_registry_round_trip():

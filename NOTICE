@@ -57,7 +57,10 @@ OpenRouter publishes no license file for it; its terms of service govern.
 Speech-model rates are read directly from the publishing vendor's own public
 pricing page. Each page is that vendor's copyrighted material; `rates` extracts
 only the published prices, model names, and billing units, which state facts
-about the vendor's own offering. No page content is reproduced.
+about the vendor's own offering. The ledger reproduces no page content. The
+source repository's parser tests keep a reduced extract of each page (model
+and plan names, rates, and billing-unit labels, in the page's own structure) under
+`tests/fixtures/origins`.
 
 - Deepgram: <https://deepgram.com/pricing>
 - AssemblyAI: <https://www.assemblyai.com/pricing>

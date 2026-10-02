@@ -24,16 +24,17 @@ from ._record import Record
 from ._trace import configure_cli_tracing, traced
 
 # Per-domain spec, all data-driven: adding a domain means adding an
-# entry here, not new parsing code. `filter_flags` maps CLI flag names to
-# filter() keyword names; `core` marks the flags usable in an unscoped
-# (cross-domain) query, per the core-vs-per-domain field split.
+# entry here, not new parsing code. `string_flags`, `value_flags`,
+# `bool_flags`, and `number_flags` map CLI flag names to filter() keyword
+# names; `core` marks the flags usable in an unscoped (cross-domain)
+# query, per the core-vs-per-domain field split.
 DOMAINS: dict[str, dict[str, Any]] = {
     "ai": {
         "tagline": "AI model pricing, capabilities, and lifecycle",
         "description": (
             "What every model costs, what it accepts and produces, and "
             "whether it's still viable to build on, fused from four "
-            "sources and cross-validated."
+            "cross-validated feeds and the vendors' own pricing pages."
         ),
         "examples": [
             ("rates ai list", "the catalog, twenty rows at a time"),
@@ -46,7 +47,7 @@ DOMAINS: dict[str, dict[str, Any]] = {
                 ),
                 "narrow by any fields",
             ),
-            ("rates ai info", "how fresh the data is, and where it came from"),
+            ("rates ai info", "how fresh the data is, and whether its sources answered"),
         ],
         "string_flags": {
             "model": {"core": False},
@@ -188,9 +189,10 @@ def _fmt_reasoning(m: Any) -> str:
     """A model's thinking modes for the table: the named levels joined
     with "/", the control's own word (toggle, budget_tokens) when there
     are no named levels, "yes" for a reasoning block with no known
-    control, and empty for a model that doesn't reason. Same vocabulary
-    as the data and the --reasoning-* flags, so a value read here can be
-    typed straight back into a filter."""
+    control, and empty for a model that doesn't reason. Level and
+    control words are the data's own and the --reasoning-* flags', so
+    one read here can be typed straight back into a filter; "yes" is
+    display-only."""
     r = m.reasoning
     if r is None:
         return ""
@@ -367,8 +369,9 @@ def _humanize(message: str, parser: argparse.ArgumentParser) -> tuple[str, str |
     so each shape it can produce gets its own plain sentence here
     rather than passing the raw message through. Returns the primary
     sentence (no leading capital or trailing period; the caller
-    supplies both) and, only for --price-unit's full list of valid
-    units, a second string long enough to read as its own paragraph
+    supplies both) and, where the full list of valid values is long
+    (--price-unit's units, the reasoning levels and controls, a choice
+    flag's options), a second string long enough to read as its own paragraph
     rather than crammed onto the end of the first line."""
     import re
 
@@ -453,29 +456,34 @@ def _typo_hint(message: str, prog: str, known_flags: list[str]) -> str | None:
     return None
 
 
-def _add_common_flags(parser: argparse.ArgumentParser, query: bool = True) -> None:
+def _add_common_flags(
+    parser: argparse.ArgumentParser,
+    query: bool = True,
+    json_help: str = "emit records as JSON, with the ledger's key names and nesting",
+    sort_example: str = '"id" or "price.input_mtok"',
+) -> None:
     if query:
         parser.add_argument("--limit", type=_nonnegative_int, default=DEFAULT_LIMIT,
                             help=f"rows to show (default {DEFAULT_LIMIT}; 0 shows all)")
         parser.add_argument("--sort-by", metavar="FIELD",
-                            help='sort field, e.g. "id" or "price.input_mtok"')
+                            help=f"sort field, e.g. {sort_example}")
         direction = parser.add_mutually_exclusive_group()
         direction.add_argument("--ascending", action="store_true")
         direction.add_argument("--descending", action="store_true")
         parser.add_argument("--no-header", action="store_true",
                             help="rows only, no header or footer (for awk/cut pipelines)")
-    parser.add_argument("--json", action="store_true",
-                        help="emit records as JSON in the ledger's own shape")
+    parser.add_argument("--json", action="store_true", help=json_help)
     parser.add_argument(
         "--fetch", choices=["stable", "live"], metavar="TIER",
         help="stable: check for our newer published snapshot; "
-             "live: fuse the raw sources directly, right now "
+             "live: fuse the raw sources directly, cached for 24 hours "
              "(omit for the bundled ledger, no network)",
     )
     parser.add_argument("--force", action="store_true",
                         help="with --fetch live, skip the 24-hour cache and fuse fresh")
     parser.add_argument("--timeout", type=float, metavar="SECONDS",
-                        help="network timeout for --fetch stable/live (up to 300)")
+                        help="per-attempt network timeout for --fetch stable/live; raises "
+                             "the built-in 30/60/120s ladder, never lowers it (up to 300)")
 
 
 def _add_filter_flags(
@@ -512,6 +520,9 @@ def _build_parser(domain: str | None) -> argparse.ArgumentParser:
     prog = "rates" if domain is None else f"rates {domain}"
     spec = DOMAINS[domain] if domain else DOMAINS["ai"]
     core_only = domain is None
+    # An unscoped query sorts on the fields every domain shares, so its
+    # help names one of those instead of a domain's price unit.
+    sort_example = '"id" or "provider"' if core_only else '"id" or "price.input_mtok"'
 
     from rates import __version__
 
@@ -531,14 +542,14 @@ def _build_parser(domain: str | None) -> argparse.ArgumentParser:
             allow_abbrev=False,
         )
         _add_filter_flags(sub, spec, core_only)
-        _add_common_flags(sub)
+        _add_common_flags(sub, sort_example=sort_example)
 
     search = subparsers.add_parser(
         "search", help="substring match across name fields", allow_abbrev=False
     )
     search.add_argument("phrase")
     _add_filter_flags(search, spec, core_only)
-    _add_common_flags(search)
+    _add_common_flags(search, sort_example=sort_example)
 
     show = subparsers.add_parser(
         "show", help="everything about one model", allow_abbrev=False
@@ -553,7 +564,9 @@ def _build_parser(domain: str | None) -> argparse.ArgumentParser:
         help="the registry itself: snapshot date, sources, freshness",
         allow_abbrev=False,
     )
-    _add_common_flags(info, query=False)
+    _add_common_flags(
+        info, query=False, json_help="emit the registry summary as JSON"
+    )
 
     return parser
 
@@ -759,8 +772,8 @@ def _apply_unscoped_sort(
     rows: list[tuple[str, Any]], args: argparse.Namespace
 ) -> list[tuple[str, Any]]:
     """One global sort over the pooled rows, never per-domain blocks
-    concatenated: a $0.90 row from one domain must not rank below a
-    $0.99 row from another just because of iteration order."""
+    concatenated: a row must not rank below another from a different
+    domain just because of iteration order."""
     if not args.sort_by:
         return rows
     _require_direction(args)
@@ -1013,7 +1026,7 @@ def _source_summary(sources: Any) -> str | None:
         return None
     reachable = [s for s in sources if s.status == "ok"]
     checked = max((s.fetched_at for s in reachable if s.fetched_at), default=None)
-    # fetched_at is a UTC instant; a daily snapshot reads best as its date.
+    # fetched_at is a UTC instant; a dated snapshot reads best as its date.
     checked_text = checked.date().isoformat() if checked else None
     failed = len(sources) - len(reachable)
     if failed == 0:
@@ -1058,7 +1071,7 @@ def _print_welcome(domain: str | None) -> None:
             print(f"  {cmd}")
             print(f"      {blurb}")
     print(
-        "\nUse --help on any command for its full options.\n"
+        "\nUse --help on any of these commands for its full options.\n"
         "More: https://github.com/shehuphd/rates"
     )
 
@@ -1195,9 +1208,9 @@ _VALUE_COMPLETERS = {
 def _candidates(domain: str) -> dict[str, list[str]]:
     """Completion candidates from the data itself, kept fast enough for
     TAB: read from the raw bundled ledger (no dataclass construction) and
-    cached to a temp file keyed by the bundled file's stat, so a package
-    upgrade invalidates it and a repeat TAB costs a stat plus a small
-    read."""
+    cached in the per-user cache directory, keyed by the bundled file's
+    stat, so a package upgrade invalidates it and a repeat TAB costs a
+    stat plus a small read."""
     import json
     from importlib import resources
 
@@ -1298,10 +1311,11 @@ def complete(argv: list[str]) -> list[str]:
     elif before[-1] == "show":
         # The id position itself; once it's filled, flags complete below.
         candidates = _candidates(domain or "ai")["identities"]
-    elif before[0] == "show":
-        # show renders one record whole, so the query flags don't apply
-        # and don't complete; only the tier and output flags do.
-        candidates = ["--fetch", "--json", "--timeout"]
+    elif before[0] in ("show", "info"):
+        # show renders one record whole and info summarizes the registry,
+        # so the query flags don't apply and don't complete; only the
+        # tier and output flags do.
+        candidates = ["--fetch", "--force", "--json", "--timeout"]
     elif before == ["completion"]:
         candidates = sorted(_COMPLETION_SCRIPTS)
     else:
@@ -1345,7 +1359,7 @@ def _flag_names(spec: dict[str, Any], core_only: bool) -> list[str]:
     if not core_only:
         names += [f"--{name}" for name in spec["bool_flags"]]
     names += ["--limit", "--sort-by", "--ascending", "--descending",
-              "--fetch", "--timeout", "--json", "--no-header"]
+              "--fetch", "--force", "--timeout", "--json", "--no-header"]
     return sorted(names)
 
 

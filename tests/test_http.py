@@ -2,6 +2,7 @@
 retries, and backoff, failure paths first."""
 
 import email.message
+import http.client
 import urllib.error
 
 import pytest
@@ -11,6 +12,7 @@ from rates._http import (
     TIMEOUT_LADDER,
     FetchError,
     fetch_json,
+    fetch_text,
     validate_timeout,
 )
 
@@ -32,14 +34,16 @@ def transport(monkeypatch):
             self.responses = []
             self.timeouts = []
             self.pauses = []
+            self.accepts = []
 
         def script(self, *responses):
             self.responses = list(responses)
 
     t = Transport()
 
-    def fake_get(url, timeout, token):
+    def fake_get(url, timeout, token, accept="application/json"):
         t.timeouts.append(timeout)
+        t.accepts.append(accept)
         result = t.responses[len(t.timeouts) - 1]
         if isinstance(result, Exception):
             raise result
@@ -166,3 +170,76 @@ def test_retry_after_shorter_than_the_ladder_pause_does_not_shrink_it(transport)
     transport.script(_http_error(503), _http_error(503, retry_after="0"), b"{}")
     fetch_json("https://example.test/x")
     assert transport.pauses == [1.0, 2.0]
+
+
+# fetch_text: the same ladder and failure contract, over a text body
+
+
+def test_fetch_text_wraps_a_clean_http_error_without_retrying(transport):
+    transport.script(_http_error(404))
+    with pytest.raises(FetchError, match="HTTP 404"):
+        fetch_text("https://example.test/pricing")
+    assert len(transport.timeouts) == 1 and transport.pauses == []
+
+
+def test_fetch_text_retries_a_transient_status_then_returns_the_body(transport):
+    transport.script(_http_error(503), b"# Pricing\n")
+    assert fetch_text("https://example.test/pricing") == "# Pricing\n"
+    assert len(transport.timeouts) == 2 and len(transport.pauses) == 1
+
+
+def test_fetch_text_gives_up_after_the_whole_ladder(transport):
+    transport.script(*[TimeoutError("slow")] * len(TIMEOUT_LADDER))
+    with pytest.raises(FetchError, match="unreachable"):
+        fetch_text("https://example.test/pricing")
+    assert transport.timeouts == list(TIMEOUT_LADDER)
+
+
+def test_fetch_text_asks_for_markdown_first_and_json_fetches_do_not(transport):
+    transport.script(b"body", b"{}")
+    fetch_text("https://example.test/pricing")
+    fetch_json("https://example.test/feed.json")
+    markdown_accept, json_accept = transport.accepts
+    assert markdown_accept.startswith("text/markdown")
+    assert "text/html" in markdown_accept
+    assert json_accept == "application/json"
+
+
+def test_fetch_text_decodes_undecodable_bytes_instead_of_raising(transport):
+    transport.script(b"price \xff\xfe $0.01")
+    body = fetch_text("https://example.test/pricing")
+    assert body.startswith("price ") and body.endswith(" $0.01")
+
+
+# Failures urllib doesn't wrap
+
+
+@pytest.mark.parametrize("fetch", [fetch_json, fetch_text])
+@pytest.mark.parametrize(
+    "error",
+    [
+        http.client.RemoteDisconnected("closed without response"),
+        http.client.IncompleteRead(b"{", 100),
+        ConnectionResetError("reset by peer"),
+    ],
+)
+def test_a_dropped_or_truncated_connection_retries_then_raises_fetch_error(
+    transport, fetch, error
+):
+    transport.script(error, error, error)
+    with pytest.raises(FetchError, match="unreachable"):
+        fetch("https://example.test/x")
+    assert len(transport.timeouts) == len(TIMEOUT_LADDER)
+
+
+def test_a_body_that_isnt_utf8_raises_fetch_error_without_retry(transport):
+    transport.script(b"\xff\xfe{not utf-8}")
+    with pytest.raises(FetchError, match="valid JSON"):
+        fetch_json("https://example.test/x")
+    assert len(transport.timeouts) == 1
+
+
+@pytest.mark.parametrize("fetch", [fetch_json, fetch_text])
+def test_a_malformed_url_raises_fetch_error(fetch):
+    with pytest.raises(FetchError, match="not a fetchable URL"):
+        fetch("not a url at all")

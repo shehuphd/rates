@@ -16,7 +16,9 @@ class LiveFusionError(RatesError):
 
 
 class AllSourcesUnreachableError(LiveFusionError):
-    """Every upstream source failed."""
+    """Every feed failed. The origin pricing pages aren't tried once the
+    feeds are all down, since they cover a few vendors' rows and can't
+    stand in for the catalog."""
 
 
 class PreferredSourceUnavailableError(LiveFusionError):
@@ -41,7 +43,8 @@ class BundledSnapshotWarning(RatesWarning):
 
 
 class StaleLedgerWarning(RatesWarning):
-    """The bundled ledger is older than this domain's staleness
+    """The best local snapshot (the bundled ledger, or a newer cached
+    ``stable`` download) is older than this domain's staleness
     threshold. The message names how stale and how to refresh."""
 
 
@@ -53,7 +56,9 @@ class SyncFallbackWarning(RatesWarning):
 
 class SourceUnreachableWarning(RatesWarning):
     """A fetch="live" fusion ran with one or more non-preferred sources
-    unreachable. The preferred source was healthy (its absence raises
-    instead), so a result was produced, but the fields those sources
-    enrich may be absent from it. The message names which sources were
-    skipped."""
+    skipped. The preferred source was healthy (its absence raises
+    instead), so a result was produced. A skipped feed leaves the records
+    it corroborates, and the fields and units it supplies, absent; a skipped origin pricing page
+    (unreachable, or fetched but yielding no records) leaves that
+    vendor's records absent altogether. The message names which sources
+    were skipped and which of the two applies."""

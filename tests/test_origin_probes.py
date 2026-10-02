@@ -1,12 +1,11 @@
 """Capability-drift probes: each origin vendor's live page still parses
-into the rows the fixtures promise.
+into records for that vendor, of the speech types.
 
 These hit the pages raw. A failing probe is the notification that the
 vendor's page changed shape: update the matching parser in
 rates/ai/_origins.py, refresh the fixture under tests/fixtures/origins,
-re-verify the unit's counted event in UNIT_REGISTRY, and update ERD.md's
-source table. Skipped unless RATES_LIVE_PROBES=1; run on the weekly
-ledger cycle.
+and re-verify the unit's counted event in UNIT_REGISTRY. Skipped unless
+RATES_LIVE_PROBES=1; run on the weekly ledger cycle.
 """
 
 import pytest
@@ -23,7 +22,7 @@ def test_origin_page_still_parses(name):
     records = _PARSERS[name](page, "9999-01-01")
     assert records, (
         f"{ORIGIN_URLS[name]} yielded no records; the page changed shape. "
-        "Update the parser, the fixture, UNIT_REGISTRY, and ERD.md."
+        "Update the parser, the fixture, and UNIT_REGISTRY."
     )
     provider = ORIGIN_PROVIDERS[name]
     assert all(r["provider"] == provider for r in records)

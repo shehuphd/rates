@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Sync the exact count samples in the docs to the bundled ledger.
+"""Sync the sample output quoted in the docs to the bundled ledger.
 
-The weekly ledger build changes the model, provider, and typed counts. README
-and USAGE quote those exact numbers in their sample output, so they drift from
+The weekly ledger build changes the model, provider, and typed counts, the
+snapshot and source-check dates, the `rates ai list` sample's rows and
+column widths, and (rarely) the schema version. README
+and USAGE quote those exact values in their sample output, so they drift from
 the shipped ledger every rebuild (the CHANGELOG quotes a rounded count, which
-hides the drift there). With no arguments this rewrites the numbers in place;
+hides the drift there). With no arguments this rewrites the samples in place;
 with ``--check`` it reports any sample that's out of sync and exits non-zero,
 so a stale figure fails the build instead of reaching a reader.
 
@@ -32,14 +34,46 @@ def _counts() -> dict[str, object]:
         "providers": len({m["provider"] for m in models}),
         "typed": sum(1 for m in models if m.get("type")),
         "snapshot": ledger["snapshot_date"],
+        "schema": ledger["schema_version"],
+        "checked": max(
+            (s["fetched_at"][:10] for s in ledger["sources"] if s.get("fetched_at")),
+            default=ledger["snapshot_date"],
+        ),
     }
 
 
+def _list_sample() -> str:
+    """The header and first three rows `rates ai list` prints for the
+    bundled ledger, rendered by the CLI's own table code so the docs'
+    sample carries the same column widths and values a reader sees."""
+    import contextlib
+    import io
+
+    sys.path.insert(0, str(ROOT / "src"))
+    from rates import _cli
+    from rates.ai._registry import Registry
+
+    registry = Registry.from_dict(json.loads(gzip.decompress(LEDGER.read_bytes())))
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _cli._render_table(_cli.DOMAINS["ai"]["columns"], list(registry), 20)
+    return "\n".join(buffer.getvalue().splitlines()[:4])
+
+
 def _rules(c: dict[str, object]) -> list[tuple[str, re.Pattern[str], str]]:
-    """Each rule targets one count-bearing line by an anchored pattern whose
-    first group is the fixed prefix, so only the number changes."""
+    """Most rules target one value-bearing line by an anchored pattern whose
+    first group is the fixed prefix, so only the value changes. The list
+    sample's rule replaces its four-line block (header and three rows)
+    with the freshly rendered table text."""
     n, p, t, d = c["models"], c["providers"], c["typed"], c["snapshot"]
+    # The `rates ai list` sample: its header line and the three rows under it.
+    list_block = re.compile(r"^PROVIDER  MODEL .*\n(?:.*\n){2}.*$", re.MULTILINE)
+    list_sample = _list_sample().replace("\\", "\\\\")
     return [
+        ("USAGE.md", list_block, list_sample),
+        ("README.md", list_block, list_sample),
+        ("USAGE.md", re.compile(r"^(  schema version: )[\d.]+$", re.MULTILINE), rf"\g<1>{c['schema']}"),
+        ("USAGE.md", re.compile(r"(\bchecked )\d{4}-\d{2}-\d{2}"), rf"\g<1>{c['checked']}"),
         ("USAGE.md", re.compile(r"^(  snapshot: )\d{4}-\d{2}-\d{2}", re.MULTILINE), rf"\g<1>{d}"),
         ("USAGE.md", re.compile(r"^(  models: )\d+$", re.MULTILINE), rf"\g<1>{n}"),
         ("USAGE.md", re.compile(r"^(  providers: )\d+$", re.MULTILINE), rf"\g<1>{p}"),
@@ -50,7 +84,7 @@ def _rules(c: dict[str, object]) -> list[tuple[str, re.Pattern[str], str]]:
 
 
 def sync(check: bool) -> list[str]:
-    """Rewrite (``check=False``) or verify (``check=True``) the doc counts.
+    """Rewrite (``check=False``) or verify (``check=True``) the doc samples.
     Returns a list of human-readable problems, empty when everything agrees."""
     counts = _counts()
     edits: dict[Path, str] = {}
@@ -64,7 +98,7 @@ def sync(check: bool) -> list[str]:
         edits[path] = new
     if check:
         return [
-            f"{rel}: count samples are stale against the bundled ledger"
+            f"{rel}: doc samples are stale against the bundled ledger"
             for rel in sorted(stale)
         ]
     for path, text in edits.items():

@@ -699,6 +699,9 @@ def _patch_fetch(monkeypatch, failing):
         return {}
 
     monkeypatch.setattr("rates.ai._fusion.fetch_json", fake)
+    # The origin pages are fetched in the same call; keep them off the
+    # network too (an empty page parses to nothing).
+    monkeypatch.setattr("rates.ai._fusion.fetch_text", lambda url, timeout=None: "")
 
 
 def test_one_fallback_down_degrades_not_fails(monkeypatch):
@@ -722,6 +725,64 @@ def test_everything_down_raises_all_sources_unreachable(monkeypatch):
     )
     with pytest.raises(AllSourcesUnreachableError):
         fetch_sources()
+
+
+def test_everything_down_never_tries_the_origin_pages(monkeypatch):
+    # The pages cover a few vendors' rows and can't stand in for the
+    # catalog, so a fusion with every feed down stops before fetching one.
+    _patch_fetch(
+        monkeypatch,
+        failing={"models_dev", "genai_prices", "litellm", "openrouter"},
+    )
+    page_fetches = []
+    monkeypatch.setattr(
+        "rates.ai._fusion.fetch_text",
+        lambda url, timeout=None: page_fetches.append(url) or "",
+    )
+    with pytest.raises(AllSourcesUnreachableError, match="feeds"):
+        fetch_sources()
+    assert page_fetches == []
+
+
+def test_an_unreachable_origin_page_degrades_and_the_feeds_still_fuse(monkeypatch):
+    from rates._http import FetchError
+    from rates.ai._origins import ORIGIN_URLS
+
+    _patch_fetch(monkeypatch, failing=set())
+
+    def failing_page(url, timeout=None):
+        raise FetchError(f"{url}: unreachable")
+
+    monkeypatch.setattr("rates.ai._fusion.fetch_text", failing_page)
+    payloads, statuses = fetch_sources()
+    assert statuses["models_dev"] == "ok"
+    for name in ORIGIN_URLS:
+        assert statuses[name] == "unreachable" and payloads[name] is None
+
+
+def test_live_sends_the_github_token_only_to_the_github_hosted_feeds(monkeypatch):
+    from rates.ai._sources import SOURCE_URLS
+
+    tokens = {}
+
+    def fake(url, timeout=None, token=None):
+        tokens[url] = token
+        return {}
+
+    monkeypatch.setattr("rates.ai._fusion.fetch_json", fake)
+    monkeypatch.setattr("rates.ai._fusion.fetch_text", lambda url, timeout=None: "")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token-not-a-credential")
+    fetch_sources()
+    hosted = {url for url in SOURCE_URLS.values() if "githubusercontent" in url}
+    assert hosted, "no GitHub-hosted feed left to check"
+    for url in SOURCE_URLS.values():
+        expected = "test-token-not-a-credential" if url in hosted else None
+        assert tokens[url] == expected, url
+
+    monkeypatch.delenv("GITHUB_TOKEN")
+    tokens.clear()
+    fetch_sources()
+    assert set(tokens.values()) == {None}
 
 
 def test_three_way_disagreement_notes_all_point_at_the_shipped_value():

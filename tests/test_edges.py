@@ -690,3 +690,89 @@ def test_build_ledger_bakes_alias_facts_into_models(tmp_path, monkeypatch):
     by_id = {m["id"]: m for m in built["models"]}
     assert by_id["gemini-pro-latest"]["alias"] == fact
     assert "alias" not in by_id["claude-opus-5"]
+
+
+# The build's origin delta report
+
+
+def _delta_fixture(tmp_path, module, monkeypatch, previous_models):
+    import gzip
+    import json
+
+    bundled = tmp_path / "src" / "rates" / "ai"
+    bundled.mkdir(parents=True)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    if previous_models is not None:
+        (bundled / "ledger-ai.json.gz").write_bytes(
+            gzip.compress(json.dumps({"models": previous_models}).encode())
+        )
+
+
+def _origin_row(provider, model_id, **price):
+    return {"provider": provider, "id": model_id, "price": {"currency": "USD", **price}}
+
+
+def test_origin_delta_report_names_vanished_new_and_moved_rows(
+    tmp_path, monkeypatch, capsys
+):
+    module = _load_build_ledger()
+    _delta_fixture(
+        tmp_path, module, monkeypatch,
+        [
+            _origin_row("deepgram", "nova-3", audio_minute=0.0043),
+            _origin_row("deepgram", "retired-model", audio_minute=0.01),
+            _origin_row("elevenlabs", "v3", kchar=0.1),
+            _origin_row("anthropic", "claude-x", input_mtok=1),
+        ],
+    )
+    module._origin_delta_report({
+        "models": [
+            _origin_row("deepgram", "nova-3", audio_minute=0.0043),
+            _origin_row("deepgram", "brand-new", kchar=0.03),
+            _origin_row("elevenlabs", "v3", kchar=0.08),
+            _origin_row("anthropic", "claude-x", input_mtok=2),
+        ]
+    })
+    lines = capsys.readouterr().out.splitlines()
+    assert lines == [
+        "origin delta: deepgram/retired-model vanished (had {'audio_minute': 0.01})",
+        "origin delta: deepgram/brand-new is new ({'kchar': 0.03})",
+        "origin delta: elevenlabs/v3 moved {'kchar': 0.1} -> {'kchar': 0.08}",
+    ]
+
+
+def test_origin_delta_report_is_silent_without_a_previous_ledger_or_a_change(
+    tmp_path, monkeypatch, capsys
+):
+    module = _load_build_ledger()
+    _delta_fixture(tmp_path, module, monkeypatch, None)
+    module._origin_delta_report({"models": [_origin_row("deepgram", "nova-3", kchar=1)]})
+    assert capsys.readouterr().out == ""
+
+    (tmp_path / "src" / "rates" / "ai" / "ledger-ai.json.gz").write_bytes(b"not gzip")
+    module._origin_delta_report({"models": [_origin_row("deepgram", "nova-3", kchar=1)]})
+    assert capsys.readouterr().out == ""
+
+
+def test_build_ledger_logs_how_many_unpriced_records_it_excluded(
+    tmp_path, monkeypatch, capsys
+):
+    module = _load_build_ledger()
+    (tmp_path / "src" / "rates" / "ai").mkdir(parents=True)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    feed = {
+        "acme": {
+            "models": {
+                "priced": {"cost": {"input": 1, "output": 2}},
+                "unpriced-a": {},
+                "unpriced-b": {},
+            }
+        }
+    }
+    monkeypatch.setattr(module, "fetch_sources", lambda: ({"models_dev": feed}, {"models_dev": "ok"}))
+    monkeypatch.setattr(module, "gather_source_freshness", lambda statuses, timeout=None: {})
+    monkeypatch.setattr(module, "record_freshness_lookup", lambda timeout=None: None)
+    assert module.main() == 0
+    out = capsys.readouterr().out
+    assert "excluded 2 record(s) with no per-unit pricing (admission criterion 2)" in out
+    assert "ledger built: 1 models" in out

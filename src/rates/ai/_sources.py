@@ -31,7 +31,8 @@ SOURCE_URLS = {
 # than letting shared upstreams vote twice; wrongness stays None until
 # the origin-check contradiction ledger exists. OpenRouter's API is
 # first-party for OpenRouter's own resale rows, the one origin pairing
-# in today's fusion.
+# among the feeds; the vendor pricing pages carry theirs in
+# _origins.ORIGIN_CARDS.
 SOURCE_CARDS: dict[str, SourceCard] = {
     "models_dev": SourceCard(name="models_dev", registry_rank=0),
     "litellm": SourceCard(name="litellm", registry_rank=1),
@@ -251,7 +252,8 @@ def normalize_litellm(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
 
 def normalize_openrouter(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     """OpenRouter: chat-completion models only, ids as provider/model.
-    Used for modality cross-checks and reasoning enrichment: its per-model
+    Used to fill modalities the preferred source lacks and for reasoning
+    enrichment: its per-model
     ``reasoning`` object is the only source carrying ``mandatory`` (does
     the API error without the parameter?) and ``default_effort``."""
     records: dict[tuple[str, str], dict[str, Any]] = {}

@@ -76,8 +76,8 @@ class SourceCard:
     ``wrongness``: measured contradiction rate against origin checks, in
     [0, 1], over ``wrongness_runs`` check runs. None means unmeasured.
 
-    ``coverage``: fraction of the current build's records this source
-    contributed to, computed per fusion run. None means uncomputed.
+    ``coverage``: fraction of the current build's input records this
+    source carries, computed per fusion run. None means uncomputed.
 
     ``registry_rank``: position in the declared strict total order,
     lower is better; unique per source by construction.

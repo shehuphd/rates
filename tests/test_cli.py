@@ -52,7 +52,7 @@ FIXTURE = {
             "price_discrepancies": [
                 {"field": "input_mtok", "chosen_source": "models_dev",
                  "chosen_value": 0.55, "other_source": "genai_prices",
-                 "other_value": 0.21, "resolved_by": "preference",
+                 "other_value": 0.21, "resolved_by": "freshness",
                  "difference_pct": 61.8}
             ],
             "lifecycle": {"status": "active"},
@@ -261,6 +261,31 @@ def test_show_renders_full_detail(capsys):
     assert "levels: low, high" in out
     assert "past 200,000 context: input_mtok: 10" in out
     assert "input_mtok: 5" in out
+
+
+def test_show_with_a_bare_id_prints_one_record_per_provider(capsys, monkeypatch):
+    import json
+
+    shared = {
+        "price": {"currency": "USD", "input_mtok": 1},
+        "lifecycle": {"status": "active"},
+    }
+    registry = Registry.from_dict({
+        **FIXTURE,
+        "models": [
+            {"provider": "acme", "id": "shared-model", **shared},
+            {"provider": "relay", "id": "shared-model", **shared},
+        ],
+    })
+    monkeypatch.setattr(
+        _cli, "_loader",
+        lambda domain: lambda fetch="bundled", timeout=None, force=False: registry,
+    )
+    code, out, _ = run(capsys, "ai", "show", "shared-model")
+    assert code == 0
+    assert "acme/shared-model" in out and "relay/shared-model" in out
+    _, out, _ = run(capsys, "ai", "show", "shared-model", "--json")
+    assert sorted(r["provider"] for r in json.loads(out)) == ["acme", "relay"]
 
 
 def test_show_renders_the_alias_fact(capsys):
@@ -819,9 +844,9 @@ def test_complete_show_offers_model_identities():
 
 def test_complete_after_the_show_id_offers_only_flags_show_accepts():
     candidates = _cli.complete(["--", "ai", "show", "anthropic/claude-opus-5", "--f"])
-    assert candidates == ["--fetch"]
+    assert candidates == ["--fetch", "--force"]
     candidates = _cli.complete(["--", "ai", "show", "anthropic/claude-opus-5", "--"])
-    assert candidates == ["--fetch", "--json", "--timeout"]
+    assert candidates == ["--fetch", "--force", "--json", "--timeout"]
 
 
 def test_complete_price_unit_values():
@@ -992,5 +1017,75 @@ def test_info_sources_count_failures_without_naming_them(capsys):
     })
     _cli._render_info({"ai": degraded}, as_json=False)
     out = capsys.readouterr().out
-    assert "sources: checked 2026-08-22; two sources inaccessible" in out
-    assert "b" != out and "unreachable" not in out
+    (sources_line,) = [line.strip() for line in out.splitlines() if "sources:" in line]
+    assert sources_line == "sources: checked 2026-08-22; two sources inaccessible"
+    assert "unreachable" not in out
+
+
+def test_info_counts_a_suspect_origin_page_as_inaccessible(capsys):
+    degraded = Registry.from_dict({
+        "schema_version": "1.1.0", "domain": "ai", "snapshot_date": "2026-09-28",
+        "sources": [
+            {"name": "a", "role": "preferred", "status": "ok", "fetched_at": "2026-09-28"},
+            {"name": "page", "role": "origin", "status": "suspect", "fetched_at": "2026-09-28"},
+        ],
+        "models": [],
+    })
+    _cli._render_info({"ai": degraded}, as_json=False)
+    out = capsys.readouterr().out
+    assert "sources: checked 2026-09-28; one source inaccessible" in out
+    assert "suspect" not in out
+
+
+# A failed live fusion
+
+
+def test_a_failed_live_fusion_exits_1_with_a_hint_at_the_other_tiers(
+    capsys, monkeypatch
+):
+    from rates import AllSourcesUnreachableError
+
+    def loader(domain):
+        def load(fetch="bundled", timeout=None, force=False):
+            raise AllSourcesUnreachableError("none of the 4 feeds could be reached.")
+
+        return load
+
+    monkeypatch.setattr(_cli, "_loader", loader)
+    code, out, err = run(capsys, "ai", "list", "--fetch", "live")
+    assert code == 1
+    assert out == ""
+    assert "none of the 4 feeds could be reached" in err
+    assert "Try --fetch stable, or drop --fetch entirely for the bundled ledger." in err
+    assert "Traceback" not in err
+
+
+def test_any_other_rates_error_exits_1_without_the_live_hint(capsys, monkeypatch):
+    from rates import RatesError
+
+    def loader(domain):
+        def load(fetch="bundled", timeout=None, force=False):
+            raise RatesError("the ledger couldn't be read.")
+
+        return load
+
+    monkeypatch.setattr(_cli, "_loader", loader)
+    code, _, err = run(capsys, "ai", "list")
+    assert code == 1
+    assert "the ledger couldn't be read" in err
+    assert "Try --fetch stable" not in err
+
+
+def test_complete_after_info_offers_only_flags_info_accepts():
+    candidates = _cli.complete(["--", "ai", "info", "--"])
+    assert candidates == ["--fetch", "--force", "--json", "--timeout"]
+
+
+def test_info_says_when_the_snapshot_is_past_the_staleness_threshold(capsys):
+    old = Registry.from_dict({
+        "schema_version": "1.1.0", "domain": "ai", "snapshot_date": "2020-01-01",
+        "sources": [], "models": [],
+    })
+    _cli._render_info({"ai": old}, as_json=False)
+    out = capsys.readouterr().out
+    assert "past the 28-day threshold; refresh with --fetch stable or --fetch live" in out

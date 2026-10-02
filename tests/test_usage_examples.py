@@ -90,5 +90,24 @@ def test_discrepancy_recipe(capsys):
         pytest.skip("no price disagreements in this snapshot")
     model = flagged[0]
     for d in model.price_discrepancies:
-        print(d.field, d.chosen_value, "vs", d.other_source, d.other_value)
-    assert "vs" in capsys.readouterr().out
+        print(d.field, d.chosen_value, "vs", d.other_source, d.other_value, f"({d.resolved_by})")
+    out = capsys.readouterr().out
+    assert "vs" in out
+    assert f"({model.price_discrepancies[0].resolved_by})" in out
+
+
+def test_alias_recipe():
+    import datetime
+
+    import rates.ai
+
+    registry = rates.ai.load()
+    aliased = [m for m in registry if m.alias is not None]
+    if not aliased:
+        pytest.skip("no rolling-alias records in this snapshot")
+    model = aliased[0]
+    if model.alias is not None:
+        assert isinstance(model.alias.convention, str) and model.alias.convention
+        assert model.alias.maintained in (True, False, None)
+        assert isinstance(model.alias.verified, datetime.date)
+        assert isinstance(model.alias.note, str) and model.alias.note

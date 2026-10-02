@@ -16,6 +16,7 @@ erDiagram
     MODEL ||--o| REASONING : "may support"
     REASONING ||--o{ REASONING_LEVEL : offers
     MODEL ||--|| LIFECYCLE : has
+    MODEL ||--o| ALIAS : "may be"
 
     REGISTRY {
         string schema_version
@@ -77,6 +78,12 @@ erDiagram
         date release_date
         date deprecation_date
     }
+    ALIAS {
+        string convention "e.g. -latest suffix"
+        bool maintained "true | false | unknown"
+        date verified
+        string note
+    }
 ```
 
 A `MODEL` with no reasoning capability at all carries no `REASONING` record, the relationship is optional (`||--o|`), not a record with empty values. `PRICE_ENTRY` is one-to-many because a single model bills on more than one unit at once (input tokens, output tokens, cache reads, and so on), and different model types bill on entirely different units, not just different rates.
@@ -89,8 +96,8 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 |---|---|---|
 | `schema_version` | string | Semver of this document's shape, independent of the `rates` package version. A later additive field, or a new value in an existing vocabulary (a source role, a status, a price unit), bumps the minor; a reader checks the major, so an older ledger still loads |
 | `domain` | string | `"ai"` for this domain |
-| `snapshot_date` | date | The daily snapshot's calendar identity: the value a `stable` check compares to find a newer release, and the date in its `ledger-YYYY-MM-DD` tag. A date, not an instant, because the AI ledger publishes once a day; a continuously-updated domain defines its own envelope. This, not a per-model timestamp, is how "did this change" gets answered for AI, by diffing two dated releases |
-| `sources` | `SOURCE[]` | Every upstream source consulted for this release, with its role and `status`. Each carries `fetched_at`, the UTC instant it was reached. Roles: the four aggregator feeds are `preferred`, `fallback`, or `validation`; a vendor's own pricing page, read directly, is `origin`. On a `ledger` release every source is expected `ok`; on a `live` call, `status` is how a caller sees that a source was skipped. `unreachable` means the fetch failed; `suspect`, defined for origin pages only, means the page was fetched but yielded no records, the signature of a redesign the parser no longer recognizes. A suspect source contributes nothing to the release |
+| `snapshot_date` | date | The snapshot's calendar identity: the value a `stable` check compares to find a newer release, and the date in its `ledger-YYYY-MM-DD` tag. A date, not an instant, because the AI ledger publishes weekly, never more than once on a given day; a continuously-updated domain defines its own envelope. This, not a per-model timestamp, is how "did this change" gets answered for AI, by diffing two dated releases |
+| `sources` | `SOURCE[]` | Every upstream source consulted for this release, with its role and `status`. Each carries `fetched_at`, the UTC instant it was reached. Roles: the four aggregator feeds are `preferred`, `fallback`, or `validation`; a vendor's own pricing page, read directly, is `origin`. On a published ledger release every source is expected `ok`; on a `live` call, `status` is how a caller sees that a source was skipped. `unreachable` means the fetch failed; `suspect`, defined for origin pages only, means the page was fetched but yielded no records, the signature of a redesign the parser no longer recognizes. A suspect source contributes nothing to the release |
 | `resolution` | object | The resolution machinery this build was decided with: `ladder` (the rung order) and per-source scorecards (`registry_rank`, `origin_providers`, `upstreams`, `wrongness`, `coverage`, and any `override` with its `override_reason`). Ships in the envelope so any record's `resolved_by` is replayable and auditable from the ledger file alone. Unmeasured evidence is `null`, never a guessed zero |
 
 ## `MODEL`
@@ -100,14 +107,15 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `provider` | string | models.dev | Raw provider identifier, e.g. `"anthropic"` |
 | `id` | string | models.dev | Provider's own model identifier |
 | `family` | string | models.dev | Lineage grouping, e.g. `"claude-opus"` |
-| `type` | string | LiteLLM `mode` (provider+id match, or bare-id match where every listing agrees); OpenRouter membership implies `chat` | Values in the current snapshot: `chat`, `completion`, `responses`, `embedding`, `image_generation`, `audio_speech`, `audio_transcription`, `realtime`; the vocabulary is open (upstream also defines `rerank`, `moderation`, and others, none of which currently clear admission). Never derived from modality alone, see below. Coverage is partial; untyped models never match a type filter |
-| `modalities.input` / `.output` | string[] | models.dev, cross-checked against OpenRouter | Content formats, e.g. `["text", "image", "pdf"]` |
+| `type` | string | LiteLLM `mode` (provider+id match, or bare-id match where every listing agrees); OpenRouter membership implies `chat` | Values in the current snapshot: `chat`, `completion`, `responses`, `embedding`, `image_generation`, `video_generation`, `audio_speech`, `audio_transcription`, `realtime`; the vocabulary is open (upstream also defines `rerank`, `moderation`, and others, none of which currently clear admission). Never derived from modality alone, see below. Coverage is partial; untyped models never match a type filter |
+| `modalities.input` / `.output` | string[] | models.dev; OpenRouter fills them when models.dev has none | Content formats, e.g. `["text", "image", "pdf"]` |
 | `context.input` / `.output` | int \| null | models.dev | Split, since input and output limits often differ |
-| `tool_call` | bool \| absent | models.dev | Absent means unknown, never `false`; a filter on it matches neither way |
-| `structured_output` | bool \| absent | models.dev | Same tri-state rule as `tool_call` |
+| `tool_call` | bool \| null | models.dev | Null means unknown, never `false`; a filter on it matches neither way. `--json` and `to_dict()` leave the key out when it's null |
+| `structured_output` | bool \| null | models.dev | Same tri-state rule as `tool_call` |
 | `price` | `PRICE_ENTRY[]` | models.dev, the rest filled from LiteLLM/genai-prices | See below |
+| `price_tiers` | `PRICE_TIER[]` | models.dev's tiers and `context_over_200k`, genai-prices' tiered form | Empty when the model has one flat price. See below |
 | `price_discrepancies` | `PRICE_DISCREPANCY[]` | Computed during fusion | Empty when sources agree, not `null`. See below |
-| `reasoning` | `REASONING` \| null | models.dev, cross-checked against OpenRouter | Absent, not empty, when the model has no reasoning capability |
+| `reasoning` | `REASONING` \| null | models.dev; OpenRouter adds `effort_parameter_required` and `default` | Absent, not empty, when the model has no reasoning capability |
 | `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-10", "litellm": "2026-09-10"}`. Fallback-admitted records never list the preferred source, so provenance is filterable. A record read from a vendor's own pricing page names that page alone, e.g. `{"deepgram_pricing": "2026-09-26"}` |
 | `lifecycle` | `LIFECYCLE` | models.dev (`status`, `release_date`) + LiteLLM (`deprecation_date`) | See below |
 | `observed_at` | datetime \| absent | Not supplied for AI | A UTC instant recording when this record's underlying value was observed upstream. Absent in the AI domain: list prices are announced, not observed to the second, and no source dates a price that finely. It exists on the record so a domain whose values move continuously (a market price) fills a stricter value into a field already present, rather than a later domain forcing a breaking change to add it. Distinct from the envelope's `snapshot_date` (a release's calendar identity) and from a source's `fetched_at` (when we reached the source): this is when the *value* was true |
@@ -119,7 +127,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 
 ### Origin records
 
-A record read from a vendor's own pricing page (currently the speech vendors: Deepgram, AssemblyAI, ElevenLabs, LiveKit) has the same shape as every other record. Fields a pricing page doesn't publish stay at their absent values, the same reading the schema uses everywhere: `family` and both `context` limits are `null`, `tool_call` and `structured_output` are unknown, `reasoning` is absent. `modalities` follows from the record's `type` (`audio_transcription` is audio in, text out; `audio_speech` the reverse). When a page and a feed both describe the same provider-and-id row, the page's values win: the vendor is the party the ladder's `origin` rung already trusts about its own prices.
+A record read from a vendor's own pricing page (currently the speech vendors: Deepgram, AssemblyAI, ElevenLabs, LiveKit) has the same shape as every other record. Fields a pricing page doesn't publish stay at their absent values, the same reading the schema uses everywhere: `family` and both `context` limits are `null`, `tool_call` and `structured_output` are unknown, `reasoning` is absent. `modalities` follows from the record's `type` (`audio_transcription` is audio in, text out; `audio_speech` the reverse). When a page and a feed both describe the same provider-and-id row, the page's record replaces the feed's record whole: its price, its absent fields, and its single-source `sources` map ship, nothing of the feed's record is merged in, and no `price_discrepancies` note is written.
 
 ## `PRICE_ENTRY`
 
@@ -138,7 +146,7 @@ Price is a flat map of unit name to rate, never a single blended number, and nev
 | `session_minute` | `u3-rt-pro` (AssemblyAI) | $0.0075 per minute of streaming-session time |
 | `kchar` | `aura-2` (Deepgram) | $0.03 per 1,000 characters of input text |
 
-`output_per_second` (per-second media billing) is also in the vocabulary; its current carriers are transcription models priced at zero, so it makes a poor illustration and a fine unit.
+`output_per_second` (per-second media billing) is also in the vocabulary: two video-generation models carry it at a rate (`grok-imagine-video` on xAI, $0.05 per second) and two transcription models carry it at zero.
 
 The three duration units are deliberately distinct because they count different events. `audio_minute` counts recorded audio processed as a batch; `streaming_audio_minute` counts audio processed over a stream; `session_minute` counts connection time whether or not audio flows (AssemblyAI's own definition of its streaming meter). A vendor's hourly rate becomes a per-minute rate by division, the same counted event in a different denominator; rates across *different* counted events are never converted into each other, since a comparison between them depends on usage assumptions only the caller holds. Each unit an origin parser emits is defined, with a dated per-vendor verification of the counted event, in `UNIT_REGISTRY` (`rates/ai/_origins.py`).
 
@@ -166,9 +174,9 @@ Covers all three upstream forms: models.dev's `tiers` list, its `context_over_20
 
 ## `PRICE_DISCREPANCY`
 
-When sources disagree on a price, which value ships in `price` is decided by the resolution ladder (see ARCHITECTURE.md § Resolving price disagreements): origin sources end the contest for their own providers' rows, freshness ranks the witnesses, and the rungs below separate ties, down to a strict declared order that can never tie. A contested unit resolves once, across all its carriers together, and then writes one note per carrier still past the threshold from the shipped value: **every note's `chosen_source`/`chosen_value` is the value on the label**, however many sources disagreed, so a three-way disagreement yields two notes both naming the same shipped value.
+When sources disagree on a price, which value ships in `price` is decided by the resolution ladder (see ARCHITECTURE.md § Resolving price disagreements): a source that is first-party for the record's provider ends the contest (no price-carrying feed is first-party for any provider today, so this rung is inert in the current fusion), freshness ranks the witnesses, and the rungs below separate ties, down to a strict declared order that can never tie. A contested unit resolves once, across all its carriers together, and then writes one note per carrier still past the threshold from the shipped value: **every note's `chosen_source`/`chosen_value` is the value on the label**, however many sources disagreed, so a three-way disagreement yields two notes both naming the same shipped value.
 
-The disagreement itself is stored, not discarded: checked directly across genai-prices and models.dev on 355 model records where both describe the same provider and the same model, 93 (26%) disagreed by more than 1% on input price. Silently dropping that would hide a verifiable fact, especially since the majority of reads against `rates` hit a static `ledger` file, generated once by a fusion run nobody watching the pipeline that week ever revisits, a warning at fusion time would never reach that reader. Stored on the record instead, it travels with the data.
+The disagreement itself is stored, not discarded: checked directly across genai-prices and models.dev on 355 model records where both describe the same provider and the same model, 93 (26%) disagreed by more than 1% on input price. Silently dropping that would hide a verifiable fact, especially since the majority of reads against `rates` hit a static ledger file (the bundled snapshot), generated once by a fusion run nobody watching the pipeline that week ever revisits, a warning at fusion time would never reach that reader. Stored on the record instead, it ships with the data.
 
 Concentrated, not random: of those 93 disagreements, 89 were on OpenRouter or open-weight community models (`qwen`, `deepseek`, `phi-4`, `mistral-small`). First-party stable APIs (Anthropic, Google, OpenAI called direct) showed zero disagreement in the same sample. Mostly staleness skew between two sources' fetch times on volatile, aggregator-routed pricing, not a dispute about a fixed fact.
 
@@ -184,27 +192,27 @@ Concentrated, not random: of those 93 disagreements, 89 were on OpenRouter or op
 | `resolved_by` | string | The ladder rung that decided the unit: `"origin"`, `"freshness"`, `"corroboration"`, `"preferred"`, `"accuracy"`, `"coverage"`, or `"registry_order"`; identical across every note for the same unit |
 | `difference_pct` | decimal | `abs(chosen - other) / max(abs(chosen), abs(other)) * 100` |
 
-A live example, `deepseek/deepseek-chat-v3.1` on OpenRouter, where litellm's fresher data beat both other carriers; the second note for the same unit names the same shipped value:
+A live example from the 2026-09-28 snapshot, DeepSeek's own `deepseek-v4-flash`, where litellm's fresher data beat both other carriers; the second note for the same unit names the same shipped value:
 
 ```json
 [
   {
     "field": "input_mtok",
     "chosen_source": "litellm",
-    "chosen_value": 0.2,
+    "chosen_value": 0.3,
     "other_source": "models_dev",
-    "other_value": 0.55,
+    "other_value": 0.15,
     "resolved_by": "freshness",
-    "difference_pct": 63.6
+    "difference_pct": 50.0
   },
   {
     "field": "input_mtok",
     "chosen_source": "litellm",
-    "chosen_value": 0.2,
+    "chosen_value": 0.3,
     "other_source": "genai_prices",
-    "other_value": 0.21,
+    "other_value": 0.14,
     "resolved_by": "freshness",
-    "difference_pct": 4.8
+    "difference_pct": 53.3
   }
 ]
 ```
@@ -222,9 +230,9 @@ Reasoning-effort control differs enough across models that a single range doesn'
 
 `none` is never assumed present. It's included in `levels` only when a source lists it as a value the model accepts, never added as a universal floor.
 
-**`control` names how the dial works**, because three different control types exist upstream: `"effort"` (named levels; `levels` and `range` apply), `"budget_tokens"` (a numeric thinking budget; `budget: {min, max}` applies, `levels` is empty), and `"toggle"` (on/off, nothing else; neither applies). One field per meaning, rather than `range` holding level ranks for one model and token budgets for another. `control` is `null` when a source says the model reasons but describes no dial at all (the always-on row above); roughly a quarter of shipped reasoning records are in that state.
+**`control` names how the dial works**, because three different control types exist upstream: `"effort"` (named levels; `levels` and `range` apply), `"budget_tokens"` (a numeric thinking budget; `budget: {min, max}` applies, `levels` is empty), and `"toggle"` (on/off, nothing else; neither applies). One field per meaning, rather than `range` holding level ranks for one model and token budgets for another. `control` is `null` when a source says the model reasons but describes no dial at all (the always-on row above); roughly a fifth of shipped reasoning records are in that state (1,142 of 5,898 as of 2026-09-28).
 
-**`effort_parameter_required` is tri-state**: `true`/`false` where OpenRouter's per-model `reasoning.mandatory` covers the model, by direct provider+id match or by bare model id where every OpenRouter listing of that id agrees (roughly 1,100 shipped records as of 2026-08-23; `true` means the API errors without the parameter), absent where no source carries it. Unknown is never reported as `false`, the same rule `tool_call` follows. OpenRouter's `default_effort` likewise fills `default` where available.
+**`effort_parameter_required` is tri-state**: `true`/`false` where OpenRouter's per-model `reasoning.mandatory` covers the model, by direct provider+id match or by bare model id where every OpenRouter listing of that id agrees (roughly 1,400 shipped records as of 2026-09-28; `true` means the API errors without the parameter), absent where no source carries it. Unknown is never reported as `false`, the same rule `tool_call` follows. OpenRouter's `default_effort` likewise fills `default` where available.
 
 Each entry in `levels` pairs a `label` (the string an API call needs) with a `rank` (its position in that model's own ascending order, for a caller doing arithmetic, "give me this model's cheapest reasoning setting," "give me the midpoint, rounded down"). The rank is only comparable within one model's own `levels`, `medium` on one model and `medium` on another aren't claimed to cost the same.
 
@@ -232,7 +240,7 @@ Each entry in `levels` pairs a `label` (the string an API call needs) with a `ra
 
 ## `ALIAS`
 
-Whether this record's own `id` is a rolling reference (`gemini-pro-latest`, `gpt-5.6-chat-latest`) rather than a dated snapshot, per [KeyCall](https://pypi.org/project/keycall)'s per-provider naming-convention catalog. Computed at ledger-build time only, by a maintainer/CI script, never by the installed `rates` package: the fact ships baked into the ledger, so a plain `pip install rates` never needs KeyCall installed. See ARCHITECTURE.md § alias facts.
+Whether this record's own `id` is a rolling reference (`gemini-flash-latest`, `gpt-5.2-chat-latest`) rather than a dated snapshot, per [KeyCall](https://pypi.org/project/keycall)'s per-provider naming-convention catalog. Computed at ledger-build time only, by a maintainer/CI script, never by the installed `rates` package: the fact ships baked into the ledger, so a plain `pip install rates` never needs KeyCall installed. See ARCHITECTURE.md § alias facts.
 
 | Field | Type | Notes |
 |---|---|---|
@@ -246,12 +254,12 @@ A rolling id's price still keys on the dated snapshot the alias currently points
 ```json
 {
   "provider": "google",
-  "id": "gemini-pro-latest",
+  "id": "gemini-flash-latest",
   "alias": {
     "convention": "-latest suffix",
     "maintained": true,
-    "verified": "2026-08-10",
-    "note": "Gemini keeps this aimed at a live model; the provider dates nothing and retires nothing from its list."
+    "verified": "2026-08-09",
+    "note": "Gemini maintains its -latest aliases aimed at a live model: on 2026-08-09 the first six dated text models advertised to a new key were all withdrawn while the aliases answered."
   }
 }
 ```
@@ -278,7 +286,7 @@ The one axis flagged as most important to get right: knowing whether a model is 
 
 ## Worked example
 
-The shipped record for `claude-opus-5` (ledger snapshot 2026-09-10):
+The shipped record for `claude-opus-5` (ledger snapshot 2026-09-28):
 
 ```json
 {
@@ -315,36 +323,36 @@ The shipped record for `claude-opus-5` (ledger snapshot 2026-09-10):
   },
   "tool_call": true,
   "structured_output": true,
-  "lifecycle": { "status": "active", "release_date": "2026-07-24", "deprecation_date": "2027-07-24" },
-  "sources": { "litellm": "2026-09-10", "models_dev": "2026-09-10", "openrouter": "2026-09-10" }
+  "lifecycle": { "status": "active", "release_date": "2026-07-24", "deprecation_date": null },
+  "sources": { "litellm": "2026-09-28", "models_dev": "2026-09-28", "openrouter": "2026-09-28" }
 }
 ```
 
-`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. `deepseek/deepseek-chat-v3.1` on OpenRouter is the case where they don't (same snapshot; the record carries three notes, the two for `input_mtok` shown here, both naming the value that shipped):
+`claude-opus-5`'s sources agree, so `price_discrepancies` is empty. DeepSeek's `deepseek-v4-flash` is the case where they don't (same snapshot; the record carries six notes, two each for `input_mtok`, `output_mtok`, and `cache_read_mtok`; the two for `input_mtok` are shown here, both naming the value that shipped):
 
 ```json
 {
-  "provider": "openrouter",
-  "id": "deepseek/deepseek-chat-v3.1",
-  "price": { "currency": "USD", "input_mtok": 0.2, "output_mtok": 0.8, "cache_read_mtok": 0.13 },
+  "provider": "deepseek",
+  "id": "deepseek-v4-flash",
+  "price": { "currency": "USD", "input_mtok": 0.3, "output_mtok": 1.2, "cache_read_mtok": 0.006, "cache_write_mtok": 0.0, "reasoning_mtok": 0.6 },
   "price_discrepancies": [
     {
       "field": "input_mtok",
       "chosen_source": "litellm",
-      "chosen_value": 0.2,
+      "chosen_value": 0.3,
       "other_source": "models_dev",
-      "other_value": 0.25,
+      "other_value": 0.15,
       "resolved_by": "freshness",
-      "difference_pct": 20.0
+      "difference_pct": 50.0
     },
     {
       "field": "input_mtok",
       "chosen_source": "litellm",
-      "chosen_value": 0.2,
+      "chosen_value": 0.3,
       "other_source": "genai_prices",
-      "other_value": 0.21,
+      "other_value": 0.14,
       "resolved_by": "freshness",
-      "difference_pct": 4.8
+      "difference_pct": 53.3
     }
   ]
 }

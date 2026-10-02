@@ -21,10 +21,10 @@ rates ai list
 ```
 
 ```
-PROVIDER  MODEL                                TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
-302ai     MiniMax-M1                           chat                             0.132      1.254       active
-302ai     MiniMax-M2                           chat                             0.33       1.32        active
-302ai     MiniMax-M2.1                         chat  yes                        0.3        1.2         active
+PROVIDER  MODEL                              TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
+302ai     MiniMax-M1                         chat                             0.132      1.254       active
+302ai     MiniMax-M2                         chat                             0.33       1.32        active
+302ai     MiniMax-M2.1                       chat  yes                        0.3        1.2         active
 ...
 
 20 of 7931 shown (--limit 0 shows all)
@@ -50,7 +50,7 @@ The full manual, CLI and Python API both, is [USAGE.md](https://github.com/shehu
 
 Provider pricing pages change often, aren't machine-readable, and don't answer the question a dev has mid-build: which option, for this job, at this budget. Several raw feeds exist ([models.dev](https://github.com/anomalyco/models.dev), [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM's model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), [OpenRouter](https://openrouter.ai/api/v1/models)), each missing pieces the others carry. `rates` fuses them into one schema rather than duplicating any single one, cross-validates prices between them, reads speech-model rates directly from the vendors' own pricing pages (Deepgram, AssemblyAI, ElevenLabs, LiveKit), and ships the result as a dated, versioned snapshot none of them offer on their own.
 
-The registry holds what could be gathered with verifiable per-unit pricing; services whose pricing isn't published, isn't accessible, or isn't per-unit at all aren't listed. See [ARCHITECTURE.md](https://github.com/shehuphd/rates/blob/main/ARCHITECTURE.md) for the design, and [ERD.md](https://github.com/shehuphd/rates/blob/main/ERD.md) for the schema itself.
+The registry holds what could be gathered with verifiable per-unit pricing; services whose pricing isn't published, isn't accessible, or isn't per-unit at all aren't listed. See [ARCHITECTURE.md](https://github.com/shehuphd/rates/blob/main/ARCHITECTURE.md) for the design, [ERD.md](https://github.com/shehuphd/rates/blob/main/ERD.md) for the schema itself, and [MANIFEST.md](https://github.com/shehuphd/rates/blob/main/MANIFEST.md) for a per-file map of the source.
 
 ## License
 

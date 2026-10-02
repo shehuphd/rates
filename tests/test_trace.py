@@ -20,9 +20,9 @@ def test_configure_cli_tracing_is_a_noop_without_traceact(monkeypatch):
     assert _trace._traced_action is None  # never reached for traceact's config
 
 
-def test_traced_wraps_when_traceact_is_present():
-    # traceact is installed in the dev venv; the wrapped function must
-    # still return its own result.
+def test_a_traced_function_still_returns_its_own_result():
+    # Whether or not traceact is installed, decorating must leave the
+    # function's result alone.
     @_trace.traced("test.op")
     def fn():
         return 41 + 1

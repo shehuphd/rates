@@ -64,7 +64,7 @@ class Price:
     """A model's price as a flat map of unit name to rate, plus currency.
 
     Never a single blended number: different model types bill on different
-    units (input_mtok, output_per_second, web_search_per_kcount), and one
+    units (input_mtok, output_per_second, requests_kcount), and one
     model bills on several at once.
     """
 
@@ -233,7 +233,8 @@ class Alias:
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> Alias:
         verified = _parse_date(data["verified"])
-        assert verified is not None, "verified is a required, non-null field"
+        if verified is None:
+            raise ValueError("alias.verified is a required, non-null field")
         return cls(
             convention=data["convention"],
             maintained=data.get("maintained"),
@@ -288,23 +289,30 @@ class Model:
     reasoning: Reasoning | None = None
     lifecycle: Lifecycle = field(default_factory=lambda: Lifecycle(status=None))
     sources: dict[str, str] = field(default_factory=dict)
-    observed_at: datetime | None = None
-    alias: Alias | None = None
-    # Baked in at ledger-build time from KeyCall's per-provider alias
-    # convention catalog, never computed at runtime: rates stays
-    # zero-dependency for every caller who isn't building the ledger
-    # itself. None for a dated/pinned id, or a provider KeyCall doesn't
-    # have convention evidence for.
     # When this record's underlying value was observed upstream, as a UTC
     # instant. None for the AI domain: model list prices are announced, not
     # continuously observed, and no source dates a price to the second. It
     # exists on the record now so a fast-moving domain (a market price) fills
     # a stricter value into a field that already exists, rather than a later
     # domain forcing a breaking schema change to add it.
+    observed_at: datetime | None = None
+    # Baked in at ledger-build time from KeyCall's per-provider alias
+    # convention catalog, never computed at runtime: rates stays
+    # zero-dependency for every caller who isn't building the ledger
+    # itself. None for a dated/pinned id, or a provider KeyCall doesn't
+    # have convention evidence for.
+    alias: Alias | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        """The record in ERD.md's JSON shape, the inverse of from_dict:
-        price flat, dates ISO, absent facts omitted rather than nulled."""
+        """The record with ERD.md's key names and nesting, the inverse of
+        from_dict: price flat, dates ISO. A key whose fact is absent is
+        omitted: at the top level family, type, tool_call,
+        structured_output, reasoning, price_tiers, observed_at, and
+        alias; inside reasoning, control, effort_parameter_required,
+        budget, and default; inside price, currency. modalities,
+        context, price, price_discrepancies, lifecycle, and sources
+        always appear, with null limits or dates and empty lists where they
+        hold nothing."""
         record: dict[str, Any] = {"provider": self.provider, "id": self.id}
         if self.family is not None:
             record["family"] = self.family

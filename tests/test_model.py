@@ -1,11 +1,11 @@
-"""Tests for the AI domain's model dataclasses, built from the worked
-examples in ERD.md verbatim."""
+"""Tests for the AI domain's model dataclasses, over fixed records in the
+ledger's shape: one whose sources agree, one whose sources disagree."""
 
 from datetime import date
 
 from rates.ai import Model
 
-# The claude-opus-5 worked example from ERD.md.
+# A full record in the ledger's shape, modeled on claude-opus-5.
 OPUS_5 = {
     "provider": "anthropic",
     "id": "claude-opus-5",
@@ -51,8 +51,7 @@ OPUS_5 = {
     },
 }
 
-# The deepseek discrepancy example from ERD.md: a partial record whose
-# sources disagree on input price.
+# A partial record whose sources disagree on input price.
 DEEPSEEK = {
     "provider": "openrouter",
     "id": "deepseek/deepseek-chat-v3.1",
@@ -64,7 +63,7 @@ DEEPSEEK = {
             "chosen_value": 0.55,
             "other_source": "genai_prices",
             "other_value": 0.21,
-            "resolved_by": "preference",
+            "resolved_by": "freshness",
             "difference_pct": 61.8,
         }
     ],
@@ -128,7 +127,7 @@ def test_discrepancy_record_parses():
     assert d.chosen_value == 0.55
     assert d.other_source == "genai_prices"
     assert d.other_value == 0.21
-    assert d.resolved_by == "preference"
+    assert d.resolved_by == "freshness"
     assert d.difference_pct == 61.8
 
 

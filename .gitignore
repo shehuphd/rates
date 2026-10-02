@@ -19,6 +19,9 @@ Desktop.ini
 # Per-run test results index.
 /TEST_INDEX.CSV
 
+# Per-call spend record written by scripts/jev_check.py.
+/jev-spend.jsonl
+
 # Built ledger release asset (published as a GitHub Release asset; the
 # gzipped copy under src/rates/ai/ is the tracked one).
 /ledger-ai.json

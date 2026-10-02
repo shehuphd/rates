@@ -18,10 +18,9 @@ doc = "ARCHITECTURE.md"
 source_dir = "src/rates"
 exempt = ["__init__", "__main__"]
 
-# rates keeps no per-file manifest; silence the reminder rather than
-# leave a notice on every run.
 [manifest]
-remind = false
+doc = "MANIFEST.md"
+sources = ["src/**/*.py", "scripts/*.py", "tests/*.py"]
 
 [[coverage]]
 object = "rates"

@@ -3,8 +3,9 @@
 traceact is a soft dependency: when it's installed alongside rates, key
 operations record traces; when it isn't, the decorator below is an
 identity and nothing changes. rates never imports it as a requirement,
-never configures sinks (that's the consuming app's decision), and never
-fails because tracing is unavailable.
+never configures sinks as a library (that's the consuming app's
+decision; the rates CLI, being the app, sets a quiet file sink when
+nothing else has), and never fails because tracing is unavailable.
 
 Verified against traceact 1.5.0's public API (traced_action,
 JsonlSink, configure, get_package_sinks) on 2026-09-09.

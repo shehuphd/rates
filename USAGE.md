@@ -29,10 +29,10 @@ rates ai list
 ```
 
 ```
-PROVIDER  MODEL                                TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
-302ai     MiniMax-M1                           chat                             0.132      1.254       active
-302ai     MiniMax-M2                           chat                             0.33       1.32        active
-302ai     MiniMax-M2.1                         chat  yes                        0.3        1.2         active
+PROVIDER  MODEL                              TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
+302ai     MiniMax-M1                         chat                             0.132      1.254       active
+302ai     MiniMax-M2                         chat                             0.33       1.32        active
+302ai     MiniMax-M2.1                       chat  yes                        0.3        1.2         active
 ...
 
 20 of 7931 shown (--limit 0 shows all)
@@ -50,7 +50,6 @@ anthropic/claude-haiku-4-5
   type: chat
   status: active
   released: 2025-10-15
-  deprecated: 2026-10-15
   modalities in: text, image, pdf
   modalities out: text
   context in: 200000
@@ -75,7 +74,7 @@ anthropic/claude-haiku-4-5
 
 Queries are scoped by domain; `ai` is the one domain today. Naming it (`rates ai list`) unlocks its full fields. Leaving it out (`rates search "opus"`) runs on the core fields every domain shares (provider, id, type, status, rate), labels each row with its domain, and prints a notice on stderr saying how to scope for more. RATE shows each record's own price in its own domain's units (`$0.132/input_mtok, $1.254/output_mtok` for an `ai` row), not a number stripped of what it means.
 
-Bare `rates` or bare `rates ai` prints a welcome with example commands. Every command takes `--help`.
+Bare `rates` or bare `rates ai` prints a welcome with example commands. `rates`, `rates ai`, and each of `list`, `filter`, `search`, `show`, and `info` take `--help`.
 
 ### The five commands
 
@@ -87,7 +86,9 @@ Bare `rates` or bare `rates ai` prints a welcome with example commands. Every co
 | `rates ai show anthropic/claude-opus-5` | Everything about one model |
 | `rates ai info` | The registry itself: snapshot date, sources, freshness |
 
-`list`, `search`, and `show` are conveniences over `filter`: `list` is `filter` with no constraints, `search` is `filter` with substring matching preset across the name fields, and `show` is `filter` narrowed to one identity with full-detail output. `show` accepts `provider/model` or a bare model id, and takes only the data-tier flags (`--json`, `--fetch`, `--timeout`): it renders one record whole, so the query flags don't apply.
+In the tables these commands print, the REASONING column shows a model's named levels (`low/medium/high`), or its control's word where there are no named levels (`toggle`, `budget_tokens`), or `yes` where a source says the model reasons but describes no control; it's blank for a model with no reasoning capability. `yes` is display-only, the `--reasoning-*` flags take levels and controls.
+
+`list`, `search`, and `show` are conveniences over `filter`: `list` is `filter` with no constraints, `search` is `filter` with substring matching preset across the name fields, and `show` is `filter` narrowed to one identity with full-detail output. `show` accepts `provider/model` or a bare model id (a bare id that several providers carry prints one record per provider), and takes only the data-tier flags (`--json`, `--fetch`, `--force`, `--timeout`): it renders one record whole, so the query flags don't apply.
 
 ### Filtering
 
@@ -113,7 +114,7 @@ rates ai filter --model-contains opus          # every opus-family model
 | `--price-min` / `--price-max` | Price bounds, always with `--price-unit` |
 | `--price-unit` | Which billing unit the bounds compare against |
 
-Price bounds always name their unit, because models bill on different units (`input_mtok`, `output_per_second`, `requests_kcount`):
+Price bounds always name their unit, because models bill on different units (`input_mtok`, `audio_minute`, `kchar`, `requests_kcount`):
 
 ```bash
 rates ai filter --provider anthropic --price-max 3 --price-unit input_mtok
@@ -135,13 +136,33 @@ rates ai filter --type chat --sort-by price.input_mtok --ascending
 
 For interactive paging through a large `--limit 0` result, pipe into a pager: `rates ai list --limit 0 | less -S` (`-S` keeps wide rows on one line instead of wrapping them). Once inside `less`, `q` quits; `Ctrl+C` only cancels a search or scroll in progress, it doesn't exit the pager.
 
+### Speech models and other non-token units
+
+The speech vendors read from their own pricing pages (Deepgram, AssemblyAI, ElevenLabs, LiveKit) bill on audio duration or text length. Four units cover them:
+
+| Unit | What it counts | Example |
+|---|---|---|
+| `audio_minute` | A minute of pre-recorded audio, transcribed as a batch | `deepgram/nova-3-monolingual` |
+| `streaming_audio_minute` | A minute of audio transcribed over a stream | `deepgram/flux-english` |
+| `session_minute` | A minute of open streaming connection, whether or not audio flows | `assemblyai/u3-rt-pro` |
+| `kchar` | 1,000 characters of text turned into speech | `elevenlabs/v3` |
+
+The three per-minute units count different events, so `rates` never converts one into another; a comparison across them depends on how much of a session carries audio, which only the caller knows. They filter and sort like any unit:
+
+```bash
+rates ai filter --type audio_transcription --price-max 0.005 --price-unit audio_minute
+rates ai filter --type audio_speech --sort-by price.kchar --ascending
+```
+
+The scoped table's two price columns are per-token, so a row priced only in these units has blank cells there (most speech models the feeds carry, such as Google's TTS models, are token-priced and fill them; Groq's two Whisper rows, priced per second, are blank there too). Such a row's rates print in three places: `rates ai show deepgram/nova-3-monolingual` lists every unit, `--json` carries the whole price map, and an unscoped listing (`rates filter --provider deepgram`) shows each row's own units in its RATE column.
+
 ### Machine output
 
 ```bash
 rates ai filter --model-contains opus --json | jq '.[].price.input_mtok'
 ```
 
-`--json` emits records in the same JSON shape the published ledger files use, so there's one format everywhere. `--no-header` prints rows only, no table header and no result-count footer, for `awk`/`cut` pipelines. Tables truncate to the terminal width only on a live terminal; piped output is never truncated. Notices go to stderr, so stdout stays clean for pipes.
+`--json` emits records in the same JSON shape the published ledger files use (same key names and nesting; a key whose fact is absent, such as `family`, `type`, `reasoning`, or `price_tiers`, is left out), so there's one format everywhere. `--no-header` prints rows only, no table header and no result-count footer, for `awk`/`cut` pipelines. Tables truncate to the terminal width only on a live terminal; piped output is never truncated. Notices go to stderr, so stdout stays clean for pipes.
 
 Exit codes: `0` success (including the welcome screens), `1` the work failed (no such model, sources unreachable), `2` the command was malformed (unknown flag, missing unit or direction).
 
@@ -153,8 +174,11 @@ A mistyped verb, domain, or flag gets the error plus one suggestion when somethi
 
 ```
 $ rates ai searc
+
 Error: 'searc' isn't valid for a command, choose from: list, filter, search, show, info.
+
 Perhaps you meant `rates ai search`?
+
 Use --help for the full option list.
 ```
 
@@ -170,16 +194,16 @@ rates ai info
 
 ```
 domain: ai
-  schema version: 1.0.0
+  schema version: 1.1.0
   snapshot: 2026-09-28 (0 days old)
   models: 7931
   providers: 220
   type known: 4986 of 7931 (untyped models never match --type)
-  sources: ok (checked 2026-09-10)
+  sources: ok (checked 2026-09-28)
   Note: Services with unpublished, inaccessible, or non-unit pricing (subscriptions, platform bundles) aren't listed.
 ```
 
-The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-09-10; two sources inaccessible`) when some didn't.
+The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-09-28; two sources inaccessible`) when some didn't. A source counts as inaccessible when it couldn't be reached or, for a vendor pricing page, when it was fetched but yielded no records (`suspect` in the envelope's `sources`, where each source also carries its role: `preferred`, `fallback`, `validation`, or `origin` for a vendor's own page).
 
 Past 28 days, commands print a staleness warning with the ways to refresh. One flag fetches fresher data on demand, on any command:
 
@@ -189,9 +213,9 @@ Past 28 days, commands print a staleness warning with the ways to refresh. One f
 | `stable` | Checks for a newer published ledger (one small request); downloads it only if one exists | Warns and serves the best local snapshot; never fails the command |
 | `live` | Refetches the raw sources and fuses them in your own process; cached for 24 hours | Fails with a named reason |
 
-`--timeout SECONDS` (up to 300) applies to `stable`/`live` only, and is an error without one of them, since the default tier makes no requests for it to govern. `--fetch` is never implied: omit it and `rates` makes no network requests at all.
+`--timeout SECONDS` (up to 300) raises the per-attempt timeout above the built-in 30/60/120-second ladder (a value below a rung leaves that rung as it is). It applies to `stable`/`live` only, and is an error without one of them, since the default tier makes no requests for it to govern. `--fetch` is never implied: omit it and `rates` makes no network requests at all.
 
-`stable` and `live` each cache under `~/.cache/rates`, a private per-user directory: a `stable` fetch is served on later `stable` (and default) calls until a newer ledger is published, so repeat checks cost one small request, not a re-download; `live` keeps its fused result for 24 hours. A successful `stable` fetch also resets the default tier's staleness clock, since the default reads whichever local snapshot is newest, not always the one installed with the package. On the CLI, every `rates` warning (staleness, stable fallback) prints as a single `Warning:` line on stderr, yellow on a color-capable terminal; the Python API keeps the standard `warnings` rendering.
+`stable` and `live` each cache under `~/.cache/rates`, a private per-user directory: a `stable` fetch is served on later `stable` (and default) calls until a newer ledger is published, so repeat checks cost one small request, not a re-download; `live` keeps its fused result for 24 hours. A successful `stable` fetch also resets the default tier's staleness clock, since the default reads whichever local snapshot is newest, not always the one installed with the package. On the CLI, every `rates` warning (the notice that a dated bundled snapshot is being served, which a default-tier command prints unless the staleness warning takes its place; staleness; stable fallback; a live fusion that skipped a source) prints as a single `Warning:` line on stderr, yellow on a color-capable terminal; the Python API keeps the standard `warnings` rendering.
 
 `--force`, with `--fetch live` only, skips that 24-hour cache and fuses fresh regardless of how recent the cached result is. It's for a volatile domain (crypto, say) where the cache window itself is already too coarse, e.g. news just moved a price and "an hour old" is wrong, not just imprecise. An error with any other `--fetch` value, or with none, since the bundled and stable tiers don't hold a cached result of their own for it to bypass.
 
@@ -268,7 +292,7 @@ registry = rates.ai.load(fetch="live", force=True)        # skip live's 24-hour 
 
 A default `load()` emits a `BundledSnapshotWarning` once per process on its first call, naming the snapshot date, so code pricing against the registry (a spend cap, say) knows it's reading a bundled snapshot rather than live data. Silence it with a `RatesWarning` filter if offline data is the deliberate choice; when the snapshot is also past the staleness threshold, `StaleLedgerWarning` carries the stronger signal and the notice steps aside.
 
-`fetch="stable"` never raises; any failed check falls back to the best local snapshot with a `SyncFallbackWarning`. `fetch="live"` raises when it can't produce an honest result, and warns with a `SourceUnreachableWarning` when it produced one but a non-preferred source was unreachable, so the fields that source enriches may be absent. Warnings use Python's `warnings` machinery, so you can escalate or silence them:
+`fetch="stable"` never raises; any failed check falls back to the best local snapshot with a `SyncFallbackWarning`. `fetch="live"` raises when it can't produce an honest result, and warns with a `SourceUnreachableWarning` when it produced one but a non-preferred source was skipped: an unreachable feed, without which the records it corroborates and the fields and units it supplies may be absent, or a vendor pricing page that was unreachable or no longer parses, whose records are then absent. That thinner result is cached for 24 hours like any other, and a repeat call inside the window reads the cache without warning again; `force=True` refetches. Warnings use Python's `warnings` machinery, so you can escalate or silence them:
 
 ```python
 import warnings
@@ -281,13 +305,13 @@ warnings.simplefilter("error", rates.StaleLedgerWarning)  # stale data becomes a
 |---|---|
 | `rates.RatesError` | Base class for everything `rates` raises |
 | `rates.LiveFusionError` | A `fetch="live"` call couldn't produce a result |
-| `rates.AllSourcesUnreachableError` | Every upstream source failed |
+| `rates.AllSourcesUnreachableError` | Every feed failed (the vendor pricing pages aren't tried once the feeds are all down) |
 | `rates.PreferredSourceUnavailableError` | The preferred source failed; a result from fallbacks alone is refused |
 | `rates.RatesWarning` | Base class for every warning `rates` emits |
 | `rates.BundledSnapshotWarning` | A default `load()` served the bundled snapshot; emitted once per process on the first such call |
 | `rates.StaleLedgerWarning` | The best local snapshot is past its staleness threshold |
 | `rates.SyncFallbackWarning` | A `fetch="stable"` check couldn't complete; local data served |
-| `rates.SourceUnreachableWarning` | A `fetch="live"` fusion ran with a non-preferred source unreachable; its enriched fields may be absent |
+| `rates.SourceUnreachableWarning` | A `fetch="live"` fusion ran with a non-preferred source skipped: a feed's corroborated records, fields, and units may be absent, or a vendor pricing page's records are absent |
 
 ### Querying
 
@@ -308,7 +332,7 @@ for model in cheapest_first:
 A `Registry` iterates over its models, has a length, and knows its own billing vocabulary:
 
 ```python
-registry.price_units()   # ['cache_audio_read_mtok', ..., 'input_mtok', 'output_mtok', ...]
+registry.price_units()   # ['audio_minute', 'cache_audio_read_mtok', ..., 'input_mtok', 'kchar', ..., 'output_mtok', ...]
 ```
 
 ### Working with a model
@@ -329,7 +353,7 @@ model.price.get("input_mtok")                       # base rate
 model.price_for(context=500_000).get("input_mtok")  # rate with tier overrides applied
 ```
 
-Where sources disagreed about a price by more than 2%, the disagreement is stored on the record rather than discarded. Which value ships is decided by a fixed resolution ladder (first-party sources end the contest for their own providers' rows, then freshest update evidence, down to a declared order that can never tie); every note's `chosen_value` is the value that shipped in `price`, however many sources disagreed, and `resolved_by` names the deciding rung:
+Where sources disagreed about a price by more than 2%, the disagreement is stored on the record rather than discarded. Which value ships is decided by a fixed resolution ladder (a source that is first-party for the record's provider would end the contest, though no price-carrying feed is one today; then freshest update evidence, down to a declared order that can never tie); every note's `chosen_value` is the value that shipped in `price`, however many sources disagreed, and `resolved_by` names the deciding rung:
 
 ```python
 for d in model.price_discrepancies:
@@ -356,7 +380,7 @@ The full field-by-field schema, including the reasoning control forms (`effort`,
 
 The registry holds what could be gathered with verifiable per-unit pricing: services whose pricing isn't published, isn't accessible, or isn't per-unit at all (subscriptions, platform bundles) aren't listed, so the catalog is what we could verify for you, never a census of everything that exists.
 
-The AI domain fuses four sources, [models.dev](https://github.com/anomalyco/models.dev) as the preferred source with [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), and [OpenRouter](https://openrouter.ai/api/v1/models) filling and cross-validating, into one schema in which every record lists the sources that contributed to it. Speech models (Deepgram, AssemblyAI, ElevenLabs, LiveKit) come from the vendors' own pricing pages, read directly, since no feed carries per-minute or per-character rates; those records name their page as their only source. The snapshot is dated and versioned, and `--fetch stable` checks the project's published releases for a newer one. What it takes for a model to appear is covered in [ARCHITECTURE.md](ARCHITECTURE.md).
+The AI domain fuses four sources, [models.dev](https://github.com/anomalyco/models.dev) as the preferred source with [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), and [OpenRouter](https://openrouter.ai/api/v1/models) filling and cross-validating, into one schema in which every record lists the sources that contributed to it. Speech models (Deepgram, AssemblyAI, ElevenLabs, LiveKit) come from the vendors' own pricing pages, read directly: models.dev and genai-prices list none of these vendors, and LiteLLM's per-second and per-character entries for some of their models aren't consumed by the fusion. Those records name their page as their only source. The snapshot is dated and versioned, and `--fetch stable` checks the project's published releases for a newer one. What it takes for a model to appear is covered in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Tracing
 

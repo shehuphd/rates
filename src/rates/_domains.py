@@ -35,7 +35,7 @@ class DomainSpec:
     a snapshot (a market price, redistribution its source's terms forbid) omits
     ``"bundled"``/``"stable"`` and offers ``"live"`` only; a bare read then
     fails with a clear message instead of serving a snapshot that shouldn't
-    exist. ``staleness_days`` is None for a domain with no daily-snapshot notion
+    exist. ``staleness_days`` is None for a domain with no dated-snapshot notion
     of stale (a live-only domain answers freshness per record, not per release).
     """
 

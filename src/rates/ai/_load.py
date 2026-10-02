@@ -108,7 +108,7 @@ def _note_bundled_snapshot(snapshot_date: str | None) -> None:
     _snapshot_noted = True
     warnings.warn(
         f"the AI-pricing registry is serving its bundled snapshot "
-        f"({snapshot_date}), the data shipped with this install; "
+        f"({snapshot_date}), the newest ledger already on this machine; "
         f"rates.ai.load(fetch='stable') checks for a newer published ledger "
         f"and fetch='live' fuses the raw sources directly",
         BundledSnapshotWarning,
@@ -161,25 +161,58 @@ def _warn_if_stale(snapshot_date: str | None) -> bool:
 
 
 def _warn_unreachable_sources(statuses: dict[str, str]) -> None:
-    """Name any non-preferred source that ``fetch_sources`` couldn't
+    """Name any fallback or validation feed ``fetch_sources`` couldn't
     reach. By the time this runs the preferred source is known healthy
-    (its own absence raises upstream), so every unreachable source here is
-    a fallback whose fields may be absent from this fusion. A best-effort
-    tier reports what it's serving instead of failing silently."""
+    (its own absence raises upstream), so every feed named here is one
+    whose contribution (corroborated records, fields, units, notes) may
+    be absent from this fusion. Origin pages are reported separately
+    (``_warn_skipped_origins``), since what goes missing with one is a
+    vendor's whole record set. A best-effort tier reports what it's
+    serving instead of failing silently."""
     skipped = sorted(
         name
         for name, status in statuses.items()
-        if status != "ok" and _ROLES.get(name) != "preferred"
+        if status != "ok" and _ROLES.get(name) not in ("preferred", "origin")
     )
     if not skipped:
         return
     warnings.warn(
         f"fused without {', '.join(skipped)}: "
-        f"{'these sources were' if len(skipped) > 1 else 'this source was'} "
-        "unreachable, so the fields they enrich (model type, reasoning "
-        "defaults, whether a reasoning-effort parameter is required) may be "
-        "absent for some models. The result is otherwise complete; retry "
-        "later for full enrichment",
+        f"{'these feeds were' if len(skipped) > 1 else 'this feed was'} "
+        "unreachable, so this result is thinner than a full fusion: "
+        "any records admitted only with a skipped feed's corroboration are "
+        "absent, the fields, price units, and discrepancy notes it "
+        "supplies may be absent from others, and a contested price may "
+        "resolve differently. This result is cached for 24 hours; "
+        "rates.ai.load(fetch='live', force=True) refetches sooner",
+        SourceUnreachableWarning,
+        stacklevel=3,
+    )
+
+
+def _warn_skipped_origins(fused: dict[str, Any]) -> None:
+    """Name any origin page that contributed nothing to this fusion,
+    read from the fused envelope so both ways a page drops out are
+    covered: ``unreachable`` (the fetch failed) and ``suspect`` (the page
+    was fetched but yielded no records). Either way that vendor's
+    records are absent from the result, which the caller should hear
+    about rather than discover from an empty filter."""
+    skipped = sorted(
+        (source["name"], source["status"])
+        for source in fused["sources"]
+        if source.get("role") == "origin" and source["status"] != "ok"
+    )
+    if not skipped:
+        return
+    named = ", ".join(f"{name} ({status})" for name, status in skipped)
+    warnings.warn(
+        f"fused without {named}: the records read from "
+        f"{'these pricing pages are' if len(skipped) > 1 else 'this pricing page are'} "
+        "absent from this result, which is cached for 24 hours. An "
+        "unreachable page may answer on a forced refetch, "
+        "rates.ai.load(fetch='live', force=True); a suspect page was "
+        "fetched but no longer parses, which a newer rates release "
+        "corrects",
         SourceUnreachableWarning,
         stacklevel=3,
     )
@@ -189,7 +222,7 @@ def _warn_unreachable_sources(statuses: dict[str, str]) -> None:
 # a predictable name in the world-shared temp root, where another local
 # user could pre-create the file and feed fabricated prices to everyone.
 
-# live: full fusion, cached per session for 24 hours
+# live: full fusion, cached on disk for 24 hours
 
 
 def _live_cache_path() -> Path:
@@ -210,6 +243,7 @@ def _load_live(timeout: float | None, force: bool = False) -> Registry:
         source_freshness=gather_source_freshness(statuses, timeout=timeout),
         record_freshness=record_freshness_lookup(timeout=timeout),
     )
+    _warn_skipped_origins(fused)
     try:
         _live_cache_path().write_text(
             json.dumps(
@@ -280,10 +314,28 @@ def _load_stable(timeout: float | None) -> Registry:
         return Registry.from_dict(local)
 
     try:
+        registry = Registry.from_dict(fetched)
+        # The staleness clock parses this date the same way on every
+        # later load, so one it can't read must never reach the cache.
+        datetime.fromisoformat(fetched["snapshot_date"])
+    except (AttributeError, KeyError, TypeError, ValueError) as exc:
+        # Parsed before it's cached, so a ledger that doesn't read is
+        # never kept as the local copy later checks compare against.
+        warnings.warn(
+            f"a newer published ledger exists but couldn't be read "
+            f"({type(exc).__name__}: {exc}); serving the local one "
+            f"(snapshot {local.get('snapshot_date')})",
+            SyncFallbackWarning,
+            stacklevel=3,
+        )
+        _warn_if_stale(local.get("snapshot_date"))
+        return Registry.from_dict(local)
+
+    try:
         _sync_cache_path().write_text(json.dumps(fetched))
     except OSError:
         pass  # an unwritable cache dir costs the cache, never the result
-    return Registry.from_dict(fetched)
+    return registry
 
 
 def _read_sync_cache() -> dict[str, Any] | None:
@@ -312,6 +364,21 @@ def _fetch_newer_ledger(
     if not isinstance(releases, list):
         raise FetchError("GitHub's releases API returned an unexpected shape")
 
+    try:
+        return _newer_ledger_from(releases, local_snapshot, timeout)
+    except (AttributeError, KeyError, TypeError) as exc:
+        # A release or asset entry of an unexpected form: the same
+        # can't-complete outcome as a failed request, never a traceback.
+        raise FetchError(
+            "GitHub's releases API returned an unexpected shape"
+        ) from exc
+
+
+def _newer_ledger_from(
+    releases: list[Any],
+    local_snapshot: str | None,
+    timeout: float | None,
+) -> dict[str, Any] | None:
     for release in releases:
         asset = next(
             (
@@ -336,11 +403,13 @@ def _fetch_newer_ledger(
         if local_snapshot and snapshot and snapshot <= local_snapshot:
             return None  # our local ledger is already current
         fetched = fetch_json(asset["browser_download_url"], timeout=timeout)
-        return fetched if isinstance(fetched, dict) else None
+        if not isinstance(fetched, dict):
+            raise FetchError("the published ledger asset isn't a JSON object")
+        return fetched
     return None  # no ledger release published yet
 
 
 def _schema_compatible(version: str | None) -> bool:
-    if not version:
+    if not version or not isinstance(version, str):
         return False
     return version.split(".", 1)[0] == SCHEMA_VERSION.split(".", 1)[0]

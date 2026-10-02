@@ -1,9 +1,10 @@
 """Origin page sources: speech vendors' own published pricing.
 
-Standalone speech vendors (Deepgram, AssemblyAI, ElevenLabs, LiveKit)
-appear in none of the four aggregator feeds, so their records enter the
-fusion from the vendors' own pricing pages, the resolution ladder's
-origin rung speaking about its own provider. Each parser reads one
+The fusion gets no records for the standalone speech vendors (Deepgram,
+AssemblyAI, ElevenLabs, LiveKit) from the feeds: two list none of them,
+and LiteLLM's per-second and per-character entries aren't consumed. So
+their records enter the fusion from the vendors' own pricing pages,
+admitted whole after the feeds have merged. Each parser reads one
 vendor's page (markdown where the vendor serves it on content
 negotiation, HTML otherwise) and emits fully formed ledger records.
 
@@ -102,7 +103,8 @@ _MODALITIES = {
 
 def _slug(name: str) -> str:
     """A listed display name as a record id: lowercased, parentheses
-    dropped, runs of non-alphanumerics collapsed to one hyphen."""
+    dropped, runs of anything but letters, digits, and dots collapsed
+    to one hyphen."""
     cleaned = re.sub(r"[()]", " ", name.lower())
     return re.sub(r"[^a-z0-9.]+", "-", cleaned).strip("-")
 
@@ -157,8 +159,9 @@ def _well_formed(price: dict[str, float]) -> bool:
 # families are transcription or synthesis models; other names in the
 # same sections are feature add-on rates (redaction, diarization) or
 # voice-agent bundles, out of scope by decision. A new family fails
-# closed: it stays unextracted until this pattern learns it, and the
-# build's delta report is where it shows up.
+# closed and silently: it stays unextracted until this pattern learns
+# it, and no report names it, since the delta report and the fidelity
+# check both work from extracted rows.
 _DEEPGRAM_STT = re.compile(r"^(nova|whisper|flux)\b")
 _DEEPGRAM_TTS = re.compile(r"^(aura|flux-tts)")
 
@@ -366,8 +369,9 @@ def normalize_origins(
 
     Returns the records plus a per-source parse status: ``ok`` when the
     page yielded rows, ``suspect`` when a fetched page yielded none (the
-    page changed shape, or its content no longer matches the parser),
-    in which case the source contributes nothing this run.
+    page changed shape, or its content no longer matches the parser,
+    including a page whose content makes its parser raise), in which
+    case the source contributes nothing this run.
     """
     records: list[dict[str, Any]] = []
     statuses: dict[str, str] = {}
@@ -375,7 +379,10 @@ def normalize_origins(
         page = payloads.get(name)
         if not isinstance(page, str):
             continue
-        parsed = parse(page, today)
+        try:
+            parsed = parse(page, today)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            parsed = []
         if parsed:
             statuses[name] = "ok"
             records.extend(parsed)

@@ -1,17 +1,30 @@
 # Changelog
 
-## 1.1.0 (2026-09-26)
+## 1.1.0 (2026-10-02)
 
 ### Added
 
-- Origin page sources: speech-model rates read directly from the publishing vendor's own pricing page, a category no aggregator feed carries. Four vendors ship in this release, Deepgram, AssemblyAI, ElevenLabs, and LiveKit, contributing 39 transcription and speech-synthesis records. An origin record has the same schema as a feed record, names its page as its only source, and wins any row it shares with a feed through the resolution ladder's origin rung. See ARCHITECTURE.md § Origin pages.
-- Four price units for duration- and character-billed models: `audio_minute` (pre-recorded audio), `streaming_audio_minute` (streamed audio), `session_minute` (streaming-connection time, AssemblyAI's own meter), and `kchar` (per 1,000 characters). Each unit's counted event is defined, with a dated per-vendor verification, in the unit registry (`rates/ai/_origins.py`), and the three duration units never convert into one another.
+- Origin page sources: speech-model rates read directly from the publishing vendor's own pricing page, in the per-minute and per-character units the vendors bill in. Four vendors ship in this release, Deepgram, AssemblyAI, ElevenLabs, and LiveKit, contributing 39 transcription and speech-synthesis records. An origin record has the same schema as a feed record and names its page as its only source; where a page and a feed carry the same provider-and-id row, the page's record replaces the feed's whole. See ARCHITECTURE.md § Origin pages.
+- Four price units for duration- and character-billed models: `audio_minute` (pre-recorded audio), `streaming_audio_minute` (streamed audio), `session_minute` (streaming-connection time, AssemblyAI's own meter), and `kchar` (per 1,000 characters). Each unit's counted event is defined, with a dated per-vendor verification, in the unit registry (`rates/ai/_origins.py`), and the three duration units never convert into one another. USAGE.md § Speech models covers querying them.
 - An `origin` source role and a `suspect` source status in the registry envelope. A pricing page that was fetched but yielded no records reports `suspect` and contributes nothing, so a vendor's page redesign degrades one source instead of shipping wrong rows.
+- On `fetch="live"`, a `SourceUnreachableWarning` naming any pricing page that was skipped (unreachable or `suspect`) and saying its records are absent from the result.
 - Origin-page drift probes in the weekly ledger workflow, an advisory per-provider delta report in each build (vanished, new, and moved rows against the previous snapshot), and an optional advisory extraction-fidelity check (`scripts/jev_check.py`, maintainer/CI tooling) that asks TypeSafe's Jev whether each extracted rate is stated by its page.
+- `MANIFEST.md`, a per-file map of the source tree.
 
 ### Changed
 
 - Ledger `schema_version` moves to 1.1.0 for the additive vocabulary above (the `origin` role, the `suspect` status, the speech units). A reader of 1.0.0 ledgers still loads it; no field changed shape.
+- The bundled ledger refreshed to ~8,000 models (2026-09-28 snapshot), the speech records included.
+- The package's trove classifier now reads Production/Stable.
+
+### Fixed
+
+- Tab completion offers `--force` wherever the flag is accepted.
+- `fetch="stable"` falls back to the local ledger with a `SyncFallbackWarning` when GitHub's release listing or the published ledger is malformed, or a connection drops mid-response; it previously raised on some of these.
+- A dropped or truncated connection, or a feed response body that isn't UTF-8, now counts as an unreachable source on `fetch="live"` instead of raising out of the fusion.
+- The skipped-source warnings on `fetch="live"` say the thinner result is cached for 24 hours and name `force=True` as the way to refetch sooner.
+- `--sort-by` help on an unscoped query names fields an unscoped query can sort on.
+- Documentation corrected against the code and the shipped ledger: source counts, admission routes, the resolution ladder's origin rung (inert while no price-carrying feed is first-party for a provider), warning categories, and the worked examples in ERD.md and USAGE.md.
 
 ## 1.0.2 (2026-09-10)
 

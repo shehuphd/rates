@@ -13,9 +13,10 @@ a checker here, never a picker; no model output ever supplies a number.
 
 Degrades to a printed skip, never a failed build, when the SDK isn't
 installed, the key is absent or refused, or the API is unreachable.
-Requires TYPESAFE_API_KEY (CI secret; locally via project/keys.toml,
-exported by the caller). Spend is recorded per call to the JSONL path
-in JEV_SPEND_FILE (default project/jev-spend.jsonl, gitignored).
+Requires TYPESAFE_API_KEY (a CI secret; locally, exported by the
+caller). Spend is recorded per call to the JSONL path in
+JEV_SPEND_FILE (default jev-spend.jsonl in the working directory, the
+repo root when run from there, where it's gitignored).
 
 Maintainer/CI tooling, not part of the installed rates package; the
 typesafe-sdk dependency exists only in the workflow's environment.
@@ -37,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from rates._http import fetch_text
 from rates.ai._origins import _PARSERS, ORIGIN_URLS
 
-SPEND_FILE = Path(os.environ.get("JEV_SPEND_FILE", "project/jev-spend.jsonl"))
+SPEND_FILE = Path(os.environ.get("JEV_SPEND_FILE", "jev-spend.jsonl"))
 
 _UNIT_PHRASES = {
     "audio_minute": "per minute of pre-recorded/batch audio",
@@ -122,7 +123,11 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 print(f"{name}: page fetch failed ({exc}); skipped")
                 continue
-            records = _PARSERS[name](page, "9999-01-01")
+            try:
+                records = _PARSERS[name](page, "9999-01-01")
+            except (AttributeError, KeyError, TypeError, ValueError) as exc:
+                print(f"{name}: parser raised ({exc}); nothing to verify")
+                continue
             if not records:
                 print(f"{name}: parser yielded nothing; nothing to verify")
                 continue

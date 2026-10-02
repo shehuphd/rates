@@ -135,7 +135,7 @@ def fused_live(monkeypatch):
 def test_live_fetches_and_caches(fused_live):
     assert len(load(fetch="live")) == 1
     assert len(load(fetch="live")) == 1
-    assert len(fused_live) == 1  # second call served from the session cache
+    assert len(fused_live) == 1  # second call served from the 24-hour on-disk cache
 
 
 def test_live_cache_expires_after_24_hours_utc(fused_live):
@@ -212,6 +212,56 @@ def test_live_names_every_unreachable_fallback(isolated_cache, monkeypatch):
     )
     with pytest.warns(SourceUnreachableWarning, match="genai_prices, openrouter"):
         load(fetch="live")
+
+
+def _live_with_envelope_sources(monkeypatch, sources):
+    """The live path with every fetch healthy and the fused envelope
+    carrying the given source rows, so origin-page statuses (which the
+    fusion decides, a parse can fail after a good fetch) reach the
+    warning."""
+    _live_with_statuses(monkeypatch, {"models_dev": "ok"})
+    monkeypatch.setattr(
+        load_module,
+        "fuse",
+        lambda payloads, statuses, **kwargs: {**FRESH, "sources": sources},
+    )
+
+
+def test_live_warns_that_a_skipped_origin_page_costs_its_records(
+    isolated_cache, monkeypatch
+):
+    _live_with_envelope_sources(
+        monkeypatch,
+        [
+            {"name": "models_dev", "role": "preferred", "status": "ok"},
+            {"name": "deepgram_pricing", "role": "origin", "status": "unreachable"},
+            {"name": "livekit_pricing", "role": "origin", "status": "suspect"},
+            {"name": "elevenlabs_pricing", "role": "origin", "status": "ok"},
+        ],
+    )
+    with pytest.warns(SourceUnreachableWarning) as caught:
+        load(fetch="live")
+    (message,) = [str(w.message) for w in caught]
+    assert "deepgram_pricing (unreachable)" in message
+    assert "livekit_pricing (suspect)" in message
+    assert "elevenlabs_pricing" not in message
+    # What goes missing is whole records, never "fields they enrich".
+    assert "records" in message and "absent" in message
+    assert "enrich" not in message
+
+
+def test_live_origin_fetch_failure_is_not_reported_as_missing_fields(
+    isolated_cache, monkeypatch
+):
+    # An origin page's fetch status reaches fetch_sources' statuses too;
+    # the feed warning must leave it to the origin warning.
+    _live_with_statuses(
+        monkeypatch, {"models_dev": "ok", "deepgram_pricing": "unreachable"}
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        load(fetch="live")
+    assert not [w for w in caught if issubclass(w.category, SourceUnreachableWarning)]
 
 
 def test_live_does_not_warn_when_every_source_is_reachable(
@@ -327,6 +377,59 @@ def test_stable_failure_warns_and_falls_back_never_raises(bundled, monkeypatch):
     with pytest.warns(SyncFallbackWarning, match="couldn't check"):
         registry = load(fetch="stable")
     assert len(registry) == 1
+
+
+@pytest.mark.parametrize(
+    "releases",
+    [
+        {"message": "API rate limit exceeded"},
+        ["not a release object"],
+        [{"published_at": "2030-01-01T00:00:00Z", "assets": ["not an asset"]}],
+        [{"published_at": "2030-01-01T00:00:00Z", "assets": None}],
+        [{"published_at": "2030-01-01T00:00:00Z",
+          "assets": [{"name": "ledger-ai.json"}]}],
+        [{"tag_name": 20300101, "assets": [{"name": "ledger-ai.json"}]}],
+    ],
+)
+def test_stable_falls_back_on_any_malformed_releases_payload(
+    bundled, monkeypatch, releases
+):
+    _patch_sync_fetch(monkeypatch, releases)
+    with pytest.warns(SyncFallbackWarning, match="unexpected shape"):
+        registry = load(fetch="stable")
+    assert len(registry) == 1
+
+
+def test_stable_falls_back_when_the_published_asset_is_not_an_object(
+    bundled, monkeypatch
+):
+    _patch_sync_fetch(monkeypatch, [_release("2030-01-01")], ledger=["not a ledger"])
+    with pytest.warns(SyncFallbackWarning, match="isn't a JSON object"):
+        registry = load(fetch="stable")
+    assert len(registry) == 1
+
+
+@pytest.mark.parametrize(
+    ("broken", "reason"),
+    [
+        ({**FRESH, "models": [{"provider": "x"}, "not a record"]}, "couldn't be read"),
+        ({**FRESH, "schema_version": 1}, "schema"),
+        ({**FRESH, "snapshot_date": "2099-01"}, "couldn't be read"),
+        ({k: v for k, v in FRESH.items() if k != "snapshot_date"}, "couldn't be read"),
+        ({**FRESH, "models": [{
+            "provider": "x", "id": "a",
+            "alias": {"convention": "c", "verified": None, "note": "n"},
+        }]}, "couldn't be read"),
+    ],
+)
+def test_stable_falls_back_and_caches_nothing_when_the_new_ledger_does_not_parse(
+    bundled, monkeypatch, broken, reason
+):
+    _patch_sync_fetch(monkeypatch, [_release("2030-01-01")], ledger=broken)
+    with pytest.warns(SyncFallbackWarning, match=reason):
+        registry = load(fetch="stable")
+    assert len(registry) == 1
+    assert not load_module._sync_cache_path().exists()
 
 
 def test_stable_with_no_ledger_release_serves_local_quietly(bundled, monkeypatch):
@@ -447,11 +550,55 @@ def test_the_actual_bundled_ledger_is_loadable_and_queryable():
 
 
 def test_bundled_source_fetched_at_reads_as_a_utc_instant():
-    # The bundled ledger predates the instant change and carries day-only
-    # fetched_at strings; they must load as timezone-aware UTC instants, not
-    # naive datetimes or bare dates.
+    # The bundled ledger's fetched_at strings must load as timezone-aware
+    # UTC instants, not naive datetimes or bare dates.
     registry = load()
     stamped = [s.fetched_at for s in registry.sources if s.fetched_at]
     assert stamped, "expected at least one reachable source with a timestamp"
     for fetched_at in stamped:
         assert fetched_at.tzinfo == timezone.utc
+
+
+# GITHUB_TOKEN pickup
+
+
+def test_stable_sends_the_environments_github_token_to_the_releases_api_only(
+    bundled, monkeypatch
+):
+    tomorrow = (datetime.now(timezone.utc).date() + timedelta(days=1)).isoformat()
+    tokens = {}
+
+    def fake(url, timeout=None, token=None):
+        tokens[url] = token
+        if "api.github.com" in url:
+            return [
+                {
+                    "tag_name": f"ledger-{tomorrow}",
+                    "assets": [
+                        {
+                            "name": "ledger-ai.json",
+                            "browser_download_url": "https://example.test/l.json",
+                        }
+                    ],
+                }
+            ]
+        return {**FRESH, "snapshot_date": tomorrow}
+
+    monkeypatch.setattr(load_module, "fetch_json", fake)
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token-not-a-credential")
+    load(fetch="stable")
+    assert tokens[load_module.RELEASES_URL] == "test-token-not-a-credential"
+    assert tokens["https://example.test/l.json"] is None
+
+
+def test_stable_sends_no_token_when_the_environment_has_none(bundled, monkeypatch):
+    tokens = {}
+
+    def fake(url, timeout=None, token=None):
+        tokens[url] = token
+        return []
+
+    monkeypatch.setattr(load_module, "fetch_json", fake)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    load(fetch="stable")
+    assert tokens == {load_module.RELEASES_URL: None}

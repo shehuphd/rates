@@ -1,24 +1,23 @@
 """Which of models.dev, LiteLLM, and genai-prices last touched its own
 data most recently, read from each source's public commit history.
 
-Used only to break a price disagreement between the preferred source
-(models.dev) and one fallback: whichever source's underlying data
-changed more recently ships its value, instead of the preferred source
-winning by declaration (see ARCHITECTURE.md § Resolving price
-disagreements). Every function here degrades to ``None`` on any
-failure, never raises: a freshness check is a quality signal, not a
-requirement, and the fusion falls back to a fixed preference order
-when one isn't available.
+Evidence for the resolution ladder's freshness rung: among the sources
+contesting a price, the one whose underlying data changed most recently
+ranks first (see ARCHITECTURE.md § Resolving price disagreements).
+Every function here degrades to ``None`` on any failure, never raises:
+a freshness check is a quality signal, not a requirement, and the
+ladder skips the rung and continues when the evidence isn't available.
 
 GitHub serves a commit-history feed per repo file, no auth required,
 with no visible rate-limit headers distinct from ``api.github.com``'s
 documented core budget (confirmed live, 2026-08-24): a separate,
-cheaper channel from the one ``sync``/``live`` already use for GitHub's
-REST API.
+cheaper channel from the one ``stable`` already uses for GitHub's REST
+API.
 """
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.parse
@@ -33,7 +32,7 @@ LOOKUP_TIMEOUT_SECONDS = 5.0
 
 # A hard ceiling on per-record models.dev lookups in one fusion run, so a
 # catalog with an unusually large disagreement count can't turn a single
-# live() call into hundreds of sequential network round trips. Past the
+# live fusion into hundreds of sequential network round trips. Past the
 # cap, remaining records skip the freshness rung, same as any other
 # unreachable freshness check, and the ladder decides below it.
 MAX_RECORD_LOOKUPS_PER_RUN = 200
@@ -132,7 +131,7 @@ def _get_bytes(url: str, timeout: float) -> bytes | None:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             body: bytes = response.read()
             return body
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
         return None
 
 
@@ -175,7 +174,7 @@ def _read_cache(url: str) -> date | None:
     try:
         age = datetime.now(timezone.utc) - datetime.fromisoformat(fetched_at)
         return date.fromisoformat(value) if age.total_seconds() <= CACHE_TTL_SECONDS else None
-    except ValueError:
+    except (TypeError, ValueError):  # TypeError: a naive or non-string timestamp
         return None
 
 
