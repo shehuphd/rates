@@ -76,10 +76,12 @@ jobs:
 
   gate:
     needs: select-model
-    # The reusable gate's jobs read the checkout; a called workflow can't
-    # hold more than its caller grants, and the top level grants nothing.
+    # A called workflow can't hold more than its caller grants, and the
+    # top level grants nothing: the gate's jobs read the checkout, and its
+    # audit job opens an issue in this repo when the audit fails.
     permissions:
       contents: read
+      issues: write
     uses: shehuphd/shiplock/.github/workflows/gate.yml@main
     with:
       shiplock-spec: "shiplock>=0.3.1"
