@@ -8,6 +8,10 @@
 - An `evaluation` model type for decision models that return typed judgments over supplied options, the mode word LiteLLM uses for the category.
 - A published zero rate is carried when the page states it in words: Jev's records price `output_mtok` at 0 because the models page says output tokens are free. A bare zero figure with no such statement is still refused as a parse artifact.
 
+### Fixed
+
+- The Deepgram parser reads the markdown form the vendor's pricing page serves on content negotiation (observed 2026-10-09), extracting the current rate and ignoring a struck-through earlier price beside it, and still reads the embedded offer data of the page's HTML form. Both forms yield the same records.
+
 ## 1.1.0 (2026-10-02)
 
 ### Added

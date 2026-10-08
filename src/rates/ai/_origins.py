@@ -74,7 +74,7 @@ UNIT_REGISTRY: dict[str, dict[str, Any]] = {
     "audio_minute": {
         "counts": "one minute of audio submitted for batch transcription",
         "verified": {
-            "deepgram": "2026-09-26",  # pricing page: pre-recorded $/min
+            "deepgram": "2026-10-09",  # pricing page: Pre-Recorded $/minute table
             "assemblyai": "2026-09-26",  # pricing page: per hour of audio submitted
             "elevenlabs": "2026-09-26",  # pricing page: Scribe v2 price per hour
         },
@@ -82,7 +82,7 @@ UNIT_REGISTRY: dict[str, dict[str, Any]] = {
     "streaming_audio_minute": {
         "counts": "one minute of audio processed over a streaming connection",
         "verified": {
-            "deepgram": "2026-09-26",  # pricing page: streaming $/min
+            "deepgram": "2026-10-09",  # pricing page: Streaming $/minute table
             "livekit": "2026-09-26",  # vendor docs: STT billed by audio duration
         },
     },
@@ -96,7 +96,7 @@ UNIT_REGISTRY: dict[str, dict[str, Any]] = {
     "kchar": {
         "counts": "1,000 characters of input text synthesized to speech",
         "verified": {
-            "deepgram": "2026-09-26",  # pricing page: $/1k characters
+            "deepgram": "2026-10-09",  # pricing page: $/1k characters
             "elevenlabs": "2026-09-26",  # pricing page: price per 1K characters
         },
     },
@@ -183,9 +183,11 @@ def _well_formed(
     )
 
 
-# --- Deepgram: schema.org offer data embedded in the page -----------------
+# --- Deepgram: the pricing page in either form it serves -------------------
 
-# Offer names read "... - <Section> - <Model> - <Plan>". Only these model
+# The page arrives as markdown on content negotiation (observed from
+# 2026-10-09) or as HTML with schema.org offer data embedded (the form
+# through 2026-10-05); the parser reads whichever came. Only these model
 # families are transcription or synthesis models; other names in the
 # same sections are feature add-on rates (redaction, diarization) or
 # voice-agent bundles, out of scope by decision. A new family fails
@@ -194,6 +196,62 @@ def _well_formed(
 # check both work from extracted rows.
 _DEEPGRAM_STT = re.compile(r"^(nova|whisper|flux)\b")
 _DEEPGRAM_TTS = re.compile(r"^(aura|flux-tts)")
+# A rate cell's current price; a struck-through "was" price (~~$x/min~~)
+# is removed before this looks.
+_DEEPGRAM_MIN = re.compile(r"\$([0-9.]+)/min\b")
+_DEEPGRAM_KCHAR = re.compile(r"\$([0-9.]+)/1k characters\b")
+
+
+def _parse_deepgram_markdown(text: str) -> dict[tuple[str, str], dict[str, float]]:
+    """Model rates from the markdown form: $/minute tables under the
+    Streaming and Pre-Recorded headings of Speech to Text, and the Text
+    to Speech table. $/hour tables restate the same rates in another
+    denominator, and add-on and voice-agent tables fail the model-name
+    gate; none of those contribute."""
+    prices: dict[tuple[str, str], dict[str, float]] = {}
+    section = subsection = denominator = ""
+    for line in text.splitlines():
+        if line.startswith("## "):
+            section, subsection, denominator = line[3:].strip().casefold(), "", ""
+            continue
+        if line.startswith("### "):
+            subsection, denominator = line[4:].strip().casefold(), ""
+            continue
+        if line.startswith("#### "):
+            denominator = line[5:].strip().casefold()
+            continue
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        # The model name stands before any dash-joined description.
+        name = re.split(r"\s+[—–-]\s+", cells[0], 1)[0]
+        model = _slug(name)
+        payg = re.sub(r"~~.*?~~", "", cells[1])
+        if section == "speech to text" and denominator == "$/minute":
+            if not _DEEPGRAM_STT.match(model):
+                continue
+            rate = _DEEPGRAM_MIN.search(payg)
+            if not rate:
+                continue
+            unit = (
+                "streaming_audio_minute"
+                if subsection == "streaming"
+                else "audio_minute"
+            )
+            prices.setdefault((model, "audio_transcription"), {})[unit] = float(
+                rate.group(1)
+            )
+        elif section == "text to speech":
+            if not _DEEPGRAM_TTS.match(model):
+                continue
+            rate = _DEEPGRAM_KCHAR.search(payg)
+            if rate:
+                prices.setdefault((model, "audio_speech"), {})["kchar"] = float(
+                    rate.group(1)
+                )
+    return prices
 
 
 def parse_deepgram(text: str, today: str) -> list[dict[str, Any]]:
@@ -204,7 +262,12 @@ def parse_deepgram(text: str, today: str) -> list[dict[str, Any]]:
         re.DOTALL,
     )
     if not match:
-        return []
+        markdown_prices = _parse_deepgram_markdown(text)
+        return [
+            _record("deepgram", model, model_type, price, "deepgram_pricing", today)
+            for (model, model_type), price in sorted(markdown_prices.items())
+            if _well_formed(price)
+        ]
     try:
         product = json.loads(match.group(1))
     except json.JSONDecodeError:

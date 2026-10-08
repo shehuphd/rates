@@ -61,7 +61,7 @@ One entry per current source file: what it defines and what it touches. A map fo
 | `tests/test_trace.py` | The traceact shim: identity when traceact is absent, and a decorated function's result left alone either way. |
 | `tests/test_usage_examples.py` | Python API recipes from USAGE.md, restated as tests against the bundled ledger. |
 | `tests/test_version.py` | `__version__` matches pyproject. |
-| `tests/fixtures/origins/` | Reduced extracts of the five vendor pricing pages (the speech vendors 2026-09-26, TypeSafe 2026-10-09): model and plan names, rates, and unit labels in each page's own structure, the recorded twins of the live probes. |
+| `tests/fixtures/origins/` | Reduced extracts of the five vendor pricing pages (recorded 2026-09-26 to 2026-10-09; both of Deepgram's served forms): model and plan names, rates, and unit labels in each page's own structure, the recorded twins of the live probes. |
 
 ## Workflows and packaging
 

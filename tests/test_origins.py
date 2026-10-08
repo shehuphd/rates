@@ -398,3 +398,39 @@ def test_an_origin_row_survives_registry_round_trip():
         "universal-streaming-multilingual",
     }
     assert all(m.type == "audio_transcription" for m in hits)
+
+
+# Deepgram's two served forms.
+
+
+def test_deepgram_markdown_and_html_forms_yield_identical_records():
+    # The vendor serves markdown on content negotiation or HTML with
+    # embedded offer data; whichever arrives, the same records ship.
+    markdown = parse_deepgram(_page("deepgram.md"), TODAY)
+    html = parse_deepgram(_page("deepgram.html"), TODAY)
+    assert markdown == html
+    assert len(markdown) == 8
+
+
+def test_deepgram_markdown_takes_the_current_rate_not_the_struck_one():
+    records = parse_deepgram(_page("deepgram.md"), TODAY)
+    by_id = {r["id"]: r for r in records}
+    # Flux English's cell reads "$0.0065/min ~~$0.0077/min~~": the
+    # struck price is the earlier one and never ships.
+    assert by_id["flux-english"]["price"]["streaming_audio_minute"] == 0.0065
+    # Whichever side of the current price the struck one stands on.
+    struck_first = (
+        "## Speech to Text\n### Streaming\n#### $/minute\n"
+        "| Model | Pay As You Go | Growth |\n| --- | --- | --- |\n"
+        "| Nova-3 Monolingual | ~~$0.0077/min~~ $0.0048/min | $0.0042/min |\n"
+    )
+    (record,) = parse_deepgram(struck_first, TODAY)
+    assert record["price"] == {"currency": "USD", "streaming_audio_minute": 0.0048}
+    # Growth-plan rates and the $/hour restatements don't ship either.
+    rates = {
+        rate
+        for r in records
+        for unit, rate in r["price"].items()
+        if unit != "currency"
+    }
+    assert 0.0057 not in rates and 0.39 not in rates
