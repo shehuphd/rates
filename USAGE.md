@@ -35,7 +35,7 @@ PROVIDER  MODEL                              TYPE  REASONING                  IN
 302ai     MiniMax-M2.1                       chat  yes                        0.3        1.2         active
 ...
 
-20 of 8057 shown (--limit 0 shows all)
+20 of 8117 shown (--limit 0 shows all)
 ```
 
 Everything about one model:
@@ -195,15 +195,15 @@ rates ai info
 ```
 domain: ai
   schema version: 1.1.0
-  snapshot: 2026-10-05 (0 days old)
-  models: 8057
+  snapshot: 2026-10-08 (0 days old)
+  models: 8117
   providers: 221
-  type known: 5049 of 8057 (untyped models never match --type)
-  sources: ok (checked 2026-10-05)
+  type known: 5076 of 8117 (untyped models never match --type)
+  sources: ok (checked 2026-10-08)
   Note: Services with unpublished, inaccessible, or non-unit pricing (subscriptions, platform bundles) aren't listed.
 ```
 
-The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-10-05; two sources inaccessible`) when some didn't. A source counts as inaccessible when it couldn't be reached or, for a vendor pricing page, when it was fetched but yielded no records (`suspect` in the envelope's `sources`, where each source also carries its role: `preferred`, `fallback`, `validation`, or `origin` for a vendor's own page).
+The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-10-08; two sources inaccessible`) when some didn't. A source counts as inaccessible when it couldn't be reached or, for a vendor pricing page, when it was fetched but yielded no records (`suspect` in the envelope's `sources`, where each source also carries its role: `preferred`, `fallback`, `validation`, or `origin` for a vendor's own page).
 
 Past 28 days, commands print a staleness warning with the ways to refresh. One flag fetches fresher data on demand, on any command:
 
