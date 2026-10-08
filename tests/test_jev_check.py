@@ -19,6 +19,7 @@ PAGES = {
     "assemblyai_pricing": "assemblyai.md",
     "elevenlabs_pricing": "elevenlabs.md",
     "livekit_pricing": "livekit.html",
+    "typesafe_pricing": "typesafe.md",
 }
 
 

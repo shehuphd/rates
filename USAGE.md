@@ -138,7 +138,7 @@ For interactive paging through a large `--limit 0` result, pipe into a pager: `r
 
 ### Speech models and other non-token units
 
-The speech vendors read from their own pricing pages (Deepgram, AssemblyAI, ElevenLabs, LiveKit) bill on audio duration or text length. Four units cover them:
+Among the vendors read from their own pricing pages, the speech vendors (Deepgram, AssemblyAI, ElevenLabs, LiveKit) bill on audio duration or text length. Four units cover them:
 
 | Unit | What it counts | Example |
 |---|---|---|
@@ -380,7 +380,7 @@ The full field-by-field schema, including the reasoning control forms (`effort`,
 
 The registry holds what could be gathered with verifiable per-unit pricing: services whose pricing isn't published, isn't accessible, or isn't per-unit at all (subscriptions, platform bundles) aren't listed, so the catalog is what we could verify for you, never a census of everything that exists.
 
-The AI domain fuses four sources, [models.dev](https://github.com/anomalyco/models.dev) as the preferred source with [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), and [OpenRouter](https://openrouter.ai/api/v1/models) filling and cross-validating, into one schema in which every record lists the sources that contributed to it. Speech models (Deepgram, AssemblyAI, ElevenLabs, LiveKit) come from the vendors' own pricing pages, read directly: models.dev and genai-prices list none of these vendors, and LiteLLM's per-second and per-character entries for some of their models aren't consumed by the fusion. Those records name their page as their only source. The snapshot is dated and versioned, and `--fetch stable` checks the project's published releases for a newer one. What it takes for a model to appear is covered in [ARCHITECTURE.md](ARCHITECTURE.md).
+The AI domain fuses four sources, [models.dev](https://github.com/anomalyco/models.dev) as the preferred source with [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), and [OpenRouter](https://openrouter.ai/api/v1/models) filling and cross-validating, into one schema in which every record lists the sources that contributed to it. Some records come from the vendors' own pricing pages, read directly: the speech models (Deepgram, AssemblyAI, ElevenLabs, LiveKit), whose vendors models.dev and genai-prices don't list and whose per-second and per-character LiteLLM entries the fusion doesn't consume, and TypeSafe's decision models, which no feed lists. Those records name their page as their only source. The snapshot is dated and versioned, and `--fetch stable` checks the project's published releases for a newer one. What it takes for a model to appear is covered in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Tracing
 

@@ -45,6 +45,8 @@ _UNIT_PHRASES = {
     "streaming_audio_minute": "per minute of streamed audio",
     "session_minute": "per minute of streaming session time",
     "kchar": "per 1,000 characters",
+    "input_mtok": "per million input tokens",
+    "output_mtok": "per million output tokens",
 }
 
 
@@ -140,15 +142,25 @@ def main() -> int:
                         continue
                     qid = f"{record['id']}::{unit}"
                     labels[qid] = f"{record['provider']}/{record['id']} {unit}={rate}"
-                    questions[qid] = Noul(
-                        instructions=(
+                    model_name = record["id"].replace("-", " ")
+                    if rate == 0:
+                        # A zero ships only when the page states it in
+                        # words, so that's what Jev is asked about.
+                        instructions = (
+                            "Does this pricing text state, in words or "
+                            f"figures, that the model named '{model_name}' "
+                            f"costs nothing {_UNIT_PHRASES[unit]} (for "
+                            "example, that those tokens are free)?"
+                        )
+                    else:
+                        instructions = (
                             "Does this pricing text state a rate equivalent to "
                             f"${rate} {_UNIT_PHRASES[unit]} for the model named "
-                            f"'{record['id'].replace('-', ' ')}'? A rate published "
+                            f"'{model_name}'? A rate published "
                             "per hour or per 1,000 units counts when the "
                             "arithmetic matches."
                         )
-                    )
+                    questions[qid] = Noul(instructions=instructions)
 
             state = _page_state(name, page)
             try:

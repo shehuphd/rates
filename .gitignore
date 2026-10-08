@@ -22,6 +22,9 @@ Desktop.ini
 # Per-call spend record written by scripts/jev_check.py.
 /jev-spend.jsonl
 
+# This repo's ShipLock allow entries; rules files are never tracked.
+/shiplock.local.toml
+
 # Built ledger release asset (published as a GitHub Release asset; the
 # gzipped copy under src/rates/ai/ is the tracked one).
 /ledger-ai.json

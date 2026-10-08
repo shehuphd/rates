@@ -22,6 +22,7 @@ from rates.ai._origins import (
     parse_deepgram,
     parse_elevenlabs,
     parse_livekit,
+    parse_typesafe,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "origins"
@@ -55,7 +56,14 @@ def _minimal_feeds() -> dict:
 
 
 @pytest.mark.parametrize(
-    "parse", [parse_deepgram, parse_assemblyai, parse_elevenlabs, parse_livekit]
+    "parse",
+    [
+        parse_deepgram,
+        parse_assemblyai,
+        parse_elevenlabs,
+        parse_livekit,
+        parse_typesafe,
+    ],
 )
 @pytest.mark.parametrize(
     "page",
@@ -178,6 +186,78 @@ def test_elevenlabs_fixture_keeps_speech_and_drops_the_rest():
     assert types == {"audio_speech", "audio_transcription"}
 
 
+def test_typesafe_fixture_yields_the_versioned_model_and_its_aliases():
+    records = parse_typesafe(_page("typesafe.md"), TODAY)
+    assert [r["id"] for r in records] == ["jev-1.13.0", "jev-latest", "jev-preview"]
+    for record in records:
+        assert record["type"] == "evaluation"
+        assert record["modalities"] == {"input": ["text"], "output": ["text"]}
+        # Output is $0 because the page states the tokens are free in
+        # words; the zero is a carried value here, never a parse artifact.
+        assert record["price"] == {
+            "currency": "USD",
+            "input_mtok": 0.042,
+            "output_mtok": 0.0,
+        }
+        assert record["provider"] == "typesafe"
+
+
+def test_typesafe_without_the_free_output_statement_prices_input_only():
+    page = (
+        "## Current models\n"
+        "| Jev | `jev-1.13.0` |\n| :- | :- |\n"
+        "| Price (per Btok / per Mtok) | $42 / $0.042 |\n\n"
+        "* **Price:** Charged per input token.\n"
+    )
+    (record,) = parse_typesafe(page, TODAY)
+    assert record["price"] == {"currency": "USD", "input_mtok": 0.042}
+
+
+def test_typesafe_refuses_a_zero_input_rate_and_an_unchargeable_page():
+    zero_rate = (
+        "## Current models\n"
+        "| Jev | `jev-1.13.0` |\n| :- | :- |\n"
+        "| Price (per Btok / per Mtok) | $0 / $0 |\n\n"
+        "* **Price:** Charged per input token. Output tokens are free.\n"
+    )
+    assert parse_typesafe(zero_rate, TODAY) == []
+    # No statement of which tokens are charged, no rows: the price
+    # figures alone don't say what the money buys.
+    no_note = (
+        "## Current models\n"
+        "| Jev | `jev-1.13.0` |\n| :- | :- |\n"
+        "| Price (per Btok / per Mtok) | $42 / $0.042 |\n"
+    )
+    assert parse_typesafe(no_note, TODAY) == []
+
+
+def test_typesafe_reads_the_mtok_figure_by_label_not_position():
+    swapped = (
+        "## Current models\n"
+        "| Jev | `jev-1.13.0` |\n| :- | :- |\n"
+        "| Price (per Mtok / per Btok) | $0.042 / $42 |\n\n"
+        "* **Price:** Charged per input token. Output tokens are free.\n"
+    )
+    (record,) = parse_typesafe(swapped, TODAY)
+    assert record["price"]["input_mtok"] == 0.042
+    # A labels/figures mismatch ships nothing for that model.
+    mismatched = swapped.replace("$0.042 / $42", "$0.042")
+    assert parse_typesafe(mismatched, TODAY) == []
+
+
+def test_typesafe_drops_an_alias_whose_target_is_not_priced():
+    page = (
+        "## Current models\n"
+        "| Jev | `jev-1.13.0` |\n| :- | :- |\n"
+        "| Price (per Btok / per Mtok) | $42 / $0.042 |\n\n"
+        "* **Price:** Charged per input token. Output tokens are free.\n\n"
+        "## Aliases\n"
+        "| Alias | Points to |\n| :- | :- |\n"
+        "| `jev-preview` | `jev-2.0.0-preview` |\n"
+    )
+    assert [r["id"] for r in parse_typesafe(page, TODAY)] == ["jev-1.13.0"]
+
+
 def test_livekit_fixture_keeps_entry_plan_stt_only():
     records = parse_livekit(_page("livekit.html"), TODAY)
     by_id = {r["id"]: r for r in records}
@@ -203,6 +283,7 @@ def test_every_emitted_unit_is_registered_with_a_vendor_verification():
         "assemblyai_pricing": _page("assemblyai.md"),
         "elevenlabs_pricing": _page("elevenlabs.md"),
         "livekit_pricing": _page("livekit.html"),
+        "typesafe_pricing": _page("typesafe.md"),
     }
     records, statuses = normalize_origins(pages, TODAY)
     assert statuses == {name: "ok" for name in ORIGIN_URLS}
@@ -235,10 +316,11 @@ def test_fuse_admits_origin_records_and_marks_the_envelope():
         "assemblyai_pricing": _page("assemblyai.md"),
         "elevenlabs_pricing": _page("elevenlabs.md"),
         "livekit_pricing": _page("livekit.html"),
+        "typesafe_pricing": _page("typesafe.md"),
     }
     out = fuse(payloads)
     providers = {m["provider"] for m in out["models"]}
-    assert {"deepgram", "assemblyai", "elevenlabs", "livekit"} <= providers
+    assert {"deepgram", "assemblyai", "elevenlabs", "livekit", "typesafe"} <= providers
     rows = {s["name"]: s for s in out["sources"]}
     for name in ORIGIN_URLS:
         assert rows[name]["role"] == "origin"

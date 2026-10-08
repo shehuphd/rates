@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.0 (2026-10-09)
+
+### Added
+
+- TypeSafe as a fifth origin page source: Jev's per-token rates read from TypeSafe's own models page (`docs.typesafe.ai/models`). Three records ship, the versioned `jev-1.13.0` and the published aliases `jev-latest` and `jev-preview`, each alias row at its target's price, so a caller pricing by either the versioned id or the id TypeSafe's model listing serves can resolve it.
+- An `evaluation` model type for decision models that return typed judgments over supplied options, the mode word LiteLLM uses for the category.
+- A published zero rate is carried when the page states it in words: Jev's records price `output_mtok` at 0 because the models page says output tokens are free. A bare zero figure with no such statement is still refused as a parse artifact.
+
 ## 1.1.0 (2026-10-02)
 
 ### Added

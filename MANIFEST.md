@@ -1,6 +1,6 @@
 # Manifest
 
-Last updated: 2026-10-02 13:59:05 UTC
+Last updated: 2026-10-08 23:36:39 UTC
 
 One entry per current source file: what it defines and what it touches. A map for orienting in the codebase, not a second copy of the docstrings.
 
@@ -23,7 +23,7 @@ One entry per current source file: what it defines and what it touches. A map fo
 | `ai/_fusion.py` | `fetch_sources()` and `fuse()`: per-source degradation, admission criteria, origin-record merge, discrepancy notes, the envelope (`SCHEMA_VERSION`, sources, resolution scorecards). |
 | `ai/_load.py` | The three fetch tiers (`bundled`/`stable`/`live`), ledger download and cache handling, and the warnings each tier emits (bundled-snapshot notice, staleness, stable fallback, skipped sources). |
 | `ai/_model.py` | `Model`: typed view of one record, `price_for()` tier resolution, `to_dict()`. |
-| `ai/_origins.py` | Origin page sources: `ORIGIN_URLS`/`ORIGIN_CARDS`, `UNIT_REGISTRY` with dated per-vendor unit verifications, one parser per vendor page (Deepgram JSON-LD, AssemblyAI markdown, ElevenLabs markdown, LiveKit HTML), shape qualification, `normalize_origins()`. Pure over fetched text; no I/O. |
+| `ai/_origins.py` | Origin page sources: `ORIGIN_URLS`/`ORIGIN_CARDS`, `UNIT_REGISTRY` with dated per-vendor unit verifications, one parser per vendor page (Deepgram JSON-LD, AssemblyAI markdown, ElevenLabs markdown, LiveKit HTML, TypeSafe markdown), shape qualification, `normalize_origins()`. Pure over fetched text; no I/O. |
 | `ai/_registry.py` | `Registry`: `from_dict`, `filter()`, `sort_by()`, `price_units()`, envelope accessors. |
 | `ai/_sources.py` | The four feed sources: `SOURCE_URLS`, `SOURCE_CARDS`, one normalizer per feed. Pure over fetched payloads. |
 | `ai/ledger-ai.json.gz` | The bundled ledger snapshot, rebuilt weekly by the ledger workflow. Never hand-edited. |
@@ -61,7 +61,7 @@ One entry per current source file: what it defines and what it touches. A map fo
 | `tests/test_trace.py` | The traceact shim: identity when traceact is absent, and a decorated function's result left alone either way. |
 | `tests/test_usage_examples.py` | Python API recipes from USAGE.md, restated as tests against the bundled ledger. |
 | `tests/test_version.py` | `__version__` matches pyproject. |
-| `tests/fixtures/origins/` | Reduced extracts of the four vendor pricing pages (2026-09-26): model and plan names, rates, and unit labels in each page's own structure, the recorded twins of the live probes. |
+| `tests/fixtures/origins/` | Reduced extracts of the five vendor pricing pages (the speech vendors 2026-09-26, TypeSafe 2026-10-09): model and plan names, rates, and unit labels in each page's own structure, the recorded twins of the live probes. |
 
 ## Workflows and packaging
 

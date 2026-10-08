@@ -27,4 +27,4 @@ def test_origin_page_still_parses(name):
     provider = ORIGIN_PROVIDERS[name]
     assert all(r["provider"] == provider for r in records)
     types = {r["type"] for r in records}
-    assert types <= {"audio_transcription", "audio_speech"}
+    assert types <= {"audio_transcription", "audio_speech", "evaluation"}

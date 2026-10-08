@@ -1,6 +1,6 @@
 # rates
 
-A pricing registry and decision layer. One domain ships today: AI API rates, per-unit prices, capabilities, and lifecycle for 7,000+ models.
+A pricing registry and decision layer. Today: AI API rates, per-unit prices, capabilities, and lifecycle for 7,000+ models.
 
 ## Before you start
 
@@ -48,9 +48,9 @@ The full manual, CLI and Python API both, is [USAGE.md](https://github.com/shehu
 
 ## Why this exists
 
-Provider pricing pages change often, aren't machine-readable, and don't answer the question a dev has mid-build: which option, for this job, at this budget. Several raw feeds exist ([models.dev](https://github.com/anomalyco/models.dev), [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM's model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), [OpenRouter](https://openrouter.ai/api/v1/models)), each missing pieces the others carry. `rates` fuses them into one schema rather than duplicating any single one, cross-validates prices between them, reads speech-model rates directly from the vendors' own pricing pages (Deepgram, AssemblyAI, ElevenLabs, LiveKit), and ships the result as a dated, versioned snapshot none of them offer on their own.
+Provider pricing pages change often, aren't always machine-readable, and don't answer the question a dev has mid-build: which option, for this job, at this budget. Several raw feeds exist ([models.dev](https://github.com/anomalyco/models.dev), [genai-prices](https://github.com/pydantic/genai-prices), [LiteLLM's model_prices_and_context_window.json](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json), [OpenRouter](https://openrouter.ai/api/v1/models)), each missing pieces the others carry. `rates` fuses them into one schema, cross-validates prices between them, reads some vendors' rates directly from their own pricing pages (Deepgram, AssemblyAI, ElevenLabs, LiveKit, TypeSafe), and presents the result as a dated, versioned snapshot.
 
-The registry holds what could be gathered with verifiable per-unit pricing; services whose pricing isn't published, isn't accessible, or isn't per-unit at all aren't listed. See [ARCHITECTURE.md](https://github.com/shehuphd/rates/blob/main/ARCHITECTURE.md) for the design, [ERD.md](https://github.com/shehuphd/rates/blob/main/ERD.md) for the schema itself, and [MANIFEST.md](https://github.com/shehuphd/rates/blob/main/MANIFEST.md) for a per-file map of the source.
+The registry holds what could be gathered with verifiable per-unit pricing; services whose pricing isn't published, accessible, or available per-unit aren't listed. See [ARCHITECTURE.md](https://github.com/shehuphd/rates/blob/main/ARCHITECTURE.md) for the design, [ERD.md](https://github.com/shehuphd/rates/blob/main/ERD.md) for the schema itself, and [MANIFEST.md](https://github.com/shehuphd/rates/blob/main/MANIFEST.md) for a per-file map of the source.
 
 ## License
 
