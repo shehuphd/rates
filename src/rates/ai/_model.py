@@ -83,22 +83,81 @@ class Price:
 
 
 @dataclass(frozen=True)
+class TierCondition:
+    """One condition a price tier applies under: a numeric dimension past
+    a threshold (``over``, e.g. context past 272,000 tokens), or a named
+    dimension equal to a value (``equals``, e.g. endpoint
+    ``/v1/decisions``)."""
+
+    dimension: str
+    over: int | None = None
+    equals: str | None = None
+
+    def matches(self, conditions: dict[str, int | str]) -> bool:
+        """Whether the caller's ``conditions`` satisfy this one. A
+        dimension the caller didn't name never matches."""
+        if self.dimension not in conditions:
+            return False
+        value = conditions[self.dimension]
+        if self.equals is not None:
+            return value == self.equals
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise TypeError(
+                f"{self.dimension} is compared against a threshold; pass an int, "
+                f"not {type(value).__name__}"
+            )
+        return self.over is not None and value > self.over
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TierCondition:
+        if "equals" in data:
+            return cls(dimension=data.get("dimension", ""), equals=data["equals"])
+        return cls(dimension=data.get("dimension", ""), over=data.get("over", 0))
+
+    def to_dict(self) -> dict[str, Any]:
+        if self.equals is not None:
+            return {"dimension": self.dimension, "equals": self.equals}
+        return {"dimension": self.dimension, "over": self.over}
+
+
+@dataclass(frozen=True)
 class PriceTier:
-    """A repricing past a usage threshold. ``price`` holds only the units
-    that change; unnamed units fall through to the base tier."""
+    """A repricing under stated conditions: past a usage threshold, on a
+    named endpoint, or both. ``price`` holds only the units that change;
+    unnamed units fall through to the base tier. The first condition is
+    ``when_dimension`` with ``when_over`` or ``when_equals``; any further
+    ones, all of which must also hold, are in ``when_also``."""
 
     when_dimension: str
-    when_over: int
+    when_over: int | None
     price: dict[str, float] = field(default_factory=dict)
+    when_equals: str | None = None
+    when_also: tuple[TierCondition, ...] = ()
+
+    @property
+    def conditions(self) -> tuple[TierCondition, ...]:
+        """Every condition this tier applies under, first one first."""
+        first = TierCondition(self.when_dimension, self.when_over, self.when_equals)
+        return (first, *self.when_also)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PriceTier:
         when = data.get("when", {})
+        first = TierCondition.from_dict(when)
         return cls(
-            when_dimension=when.get("dimension", ""),
-            when_over=when.get("over", 0),
+            when_dimension=first.dimension,
+            when_over=first.over,
             price=dict(data.get("price", {})),
+            when_equals=first.equals,
+            when_also=tuple(TierCondition.from_dict(c) for c in when.get("and", [])),
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        first, *also = self.conditions
+        when = first.to_dict()
+        if also:
+            when["and"] = [condition.to_dict() for condition in also]
+        return {"when": when, "price": dict(self.price)}
 
 
 @dataclass(frozen=True)
@@ -334,13 +393,7 @@ class Model:
         price.update(self.price.units)
         record["price"] = price
         if self.price_tiers:
-            record["price_tiers"] = [
-                {
-                    "when": {"dimension": t.when_dimension, "over": t.when_over},
-                    "price": dict(t.price),
-                }
-                for t in self.price_tiers
-            ]
+            record["price_tiers"] = [t.to_dict() for t in self.price_tiers]
         record["price_discrepancies"] = [
             {
                 "field": d.field,
@@ -399,23 +452,29 @@ class Model:
             }
         return record
 
-    def price_for(self, **conditions: int) -> Price:
+    def price_for(self, **conditions: int | str) -> Price:
         """The effective price under the given conditions, e.g.
-        ``price_for(context=500000)``.
+        ``price_for(context=500000)`` or
+        ``price_for(endpoint="/v1/decisions", context=500000)``.
 
-        Applies every matching tier's overrides on top of the base price,
-        lowest threshold first, so the highest matching threshold wins per
-        unit. With no matching tier (or no tiers at all) this is the base
-        price unchanged.
+        A tier matches when every one of its conditions holds. Matching
+        tiers' overrides apply on top of the base price in order: fewer
+        conditions first, then lowest threshold first, so per unit the
+        tier with the most conditions wins and, among those, the highest
+        threshold. With no matching tier (or no tiers at all) this is the
+        base price unchanged. A threshold dimension given anything but an
+        int raises ``TypeError``.
         """
         units = dict(self.price.units)
         matching = sorted(
             (
                 t for t in self.price_tiers
-                if t.when_dimension in conditions
-                and conditions[t.when_dimension] > t.when_over
+                if all(c.matches(conditions) for c in t.conditions)
             ),
-            key=lambda t: t.when_over,
+            key=lambda t: (
+                len(t.conditions),
+                max(c.over or 0 for c in t.conditions),
+            ),
         )
         for tier in matching:
             units.update(tier.price)

@@ -58,8 +58,10 @@ erDiagram
         decimal difference_pct
     }
     PRICE_TIER {
-        string when_dimension "e.g. context"
-        int when_over "threshold, e.g. 200000"
+        string when_dimension "e.g. context, endpoint"
+        int when_over "threshold, e.g. 200000; absent on a named condition"
+        string when_equals "named value, e.g. /v1/decisions"
+        list when_and "further conditions, all of which must hold"
         map price "unit-to-rate overrides"
     }
     REASONING {
@@ -107,13 +109,13 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 | `provider` | string | models.dev | Raw provider identifier, e.g. `"anthropic"` |
 | `id` | string | models.dev | Provider's own model identifier |
 | `family` | string | models.dev | Lineage grouping, e.g. `"claude-opus"` |
-| `type` | string | LiteLLM `mode` (provider+id match, or bare-id match where every listing agrees); OpenRouter membership implies `chat`; an origin record's parser states it | Values in the current snapshot: `chat`, `completion`, `responses`, `embedding`, `image_generation`, `video_generation`, `audio_speech`, `audio_transcription`, `realtime`, `evaluation`; the vocabulary is open (upstream also defines `rerank`, `moderation`, and others, none of which currently clear admission). Never derived from modality alone, see below. Coverage is partial; untyped models never match a type filter |
+| `type` | string | LiteLLM `mode`, its `evaluation` read as `decisions` since LiteLLM uses both words for decision models (provider+id match, or bare-id match where every listing agrees); OpenRouter membership implies `chat`; an origin record's parser states it | Values in the current snapshot: `chat`, `completion`, `responses`, `embedding`, `image_generation`, `video_generation`, `audio_speech`, `audio_transcription`, `realtime`, `decisions`; the vocabulary is open (upstream also defines `rerank`, `moderation`, and others, none of which currently clear admission). Never derived from modality alone, see below. Coverage is partial; untyped models never match a type filter |
 | `modalities.input` / `.output` | string[] | models.dev; OpenRouter fills them when models.dev has none | Content formats, e.g. `["text", "image", "pdf"]` |
 | `context.input` / `.output` | int \| null | models.dev | Split, since input and output limits often differ |
 | `tool_call` | bool \| null | models.dev | Null means unknown, never `false`; a filter on it matches neither way. `--json` and `to_dict()` leave the key out when it's null |
 | `structured_output` | bool \| null | models.dev | Same tri-state rule as `tool_call` |
 | `price` | `PRICE_ENTRY[]` | models.dev, the rest filled from LiteLLM/genai-prices | See below |
-| `price_tiers` | `PRICE_TIER[]` | models.dev's tiers and `context_over_200k`, genai-prices' tiered form | Empty when the model has one flat price. See below |
+| `price_tiers` | `PRICE_TIER[]` | Context tiers: models.dev's tiers and `context_over_200k`, genai-prices' tiered form. Endpoint tiers: LiteLLM's endpoint-suffixed keys (`*_decisions`) | Empty when the model has one flat price. See below |
 | `price_discrepancies` | `PRICE_DISCREPANCY[]` | Computed during fusion | Empty when sources agree, not `null`. See below |
 | `reasoning` | `REASONING` \| null | models.dev; OpenRouter adds `effort_parameter_required` and `default` | Absent, not empty, when the model has no reasoning capability |
 | `sources` | map | Computed during fusion | Which sources contributed to this record, each with its fetch date, e.g. `{"models_dev": "2026-09-10", "litellm": "2026-09-10"}`. Fallback-admitted records never list the preferred source, so provenance is filterable. A record read from a vendor's own pricing page names that page alone, e.g. `{"deepgram_pricing": "2026-09-26"}` |
@@ -127,7 +129,7 @@ A `MODEL` with no reasoning capability at all carries no `REASONING` record, the
 
 ### Origin records
 
-A record read from a vendor's own pricing page (the speech vendors Deepgram, AssemblyAI, ElevenLabs, and LiveKit, plus TypeSafe) has the same shape as every other record. Fields a pricing page doesn't publish stay at their absent values, the same reading the schema uses everywhere: `family` and both `context` limits are `null`, `tool_call` and `structured_output` are unknown, `reasoning` is absent. `modalities` follows from the record's `type` (`audio_transcription` is audio in, text out; `audio_speech` the reverse; `evaluation` is text in, text out). When a page and a feed both describe the same provider-and-id row, the page's record replaces the feed's record whole: its price, its absent fields, and its single-source `sources` map ship, nothing of the feed's record is merged in, and no `price_discrepancies` note is written.
+A record read from a vendor's own pricing page (the speech vendors Deepgram, AssemblyAI, ElevenLabs, and LiveKit, plus TypeSafe) has the same shape as every other record. Fields a pricing page doesn't publish stay at their absent values, the same reading the schema uses everywhere: `family` and both `context` limits are `null`, `tool_call` and `structured_output` are unknown, `reasoning` is absent. `modalities` follows from the record's `type` (`audio_transcription` is audio in, text out; `audio_speech` the reverse; `decisions` is text in, text out). When a page and a feed both describe the same provider-and-id row, the page's record replaces the feed's record whole: its price, its absent fields, and its single-source `sources` map ship, nothing of the feed's record is merged in, and no `price_discrepancies` note is written.
 
 ## `PRICE_ENTRY`
 
@@ -154,7 +156,7 @@ A caller who wants a single comparable number (a "blended $/mtok," say) computes
 
 ## `PRICE_TIER`
 
-Some providers reprice a model past a usage threshold, most commonly context size: Gemini and GPT long-context models charge one rate below 200k input tokens and a higher rate above. `price` always holds the base tier, so nothing about flat-price models, filtering, or `price_max` changes; tiers are an additional, optional `price_tiers` list:
+Some providers reprice a model past a usage threshold, most commonly context size, or when it's called through a particular endpoint: Gemini and GPT long-context models charge one rate below 200k input tokens and a higher rate above. `price` always holds the base tier, so nothing about flat-price models, filtering, or `price_max` changes; tiers are an additional, optional `price_tiers` list:
 
 ```json
 "price": { "currency": "USD", "input_mtok": 10, "output_mtok": 45 },
@@ -166,7 +168,24 @@ Some providers reprice a model past a usage threshold, most commonly context siz
 ]
 ```
 
-Each tier's `price` holds only the units that change; unnamed units fall through to base. `when` is open-shaped: `context` is the only dimension upstream data carries today, and a dimension beyond it (volume, batch) fits without schema change. On the caller side the tier is explicit opt-in, matching `price_unit`: `model.price` is the base tier, `model.price_for(context=500000)` resolves the applicable overrides into a flat price. `filter(price_max=...)` compares against base.
+Each tier's `price` holds only the units that change; unnamed units fall through to base. On the caller side a tier is explicit opt-in, matching `price_unit`: `model.price` is the base tier, `model.price_for(context=500000)` resolves the applicable overrides into a flat price. `filter(price_max=...)` compares against base.
+
+A condition is either a threshold (`over`, on a numeric dimension such as `context`) or a named value (`equals`). `endpoint` is the one named dimension upstream data carries today: the API path a model is called through, in the spelling LiteLLM's `supported_endpoints` uses. OpenAI's `gpt-6-luna` costs the same on its Decisions API (`/v1/decisions`) as anywhere else, except that output tokens aren't charged, and the tier carries that one difference. A tier can also require further conditions, all of which must hold, under `and`; LiteLLM prices the Decisions endpoint past its long-context threshold separately, and that's the combined tier:
+
+```json
+"price": { "currency": "USD", "input_mtok": 0.1, "output_mtok": 0.5 },
+"price_tiers": [
+  { "when": { "dimension": "context", "over": 272000 },
+    "price": { "input_mtok": 0.2, "output_mtok": 0.75 } },
+  { "when": { "dimension": "endpoint", "equals": "/v1/decisions" },
+    "price": { "output_mtok": 0 } },
+  { "when": { "dimension": "endpoint", "equals": "/v1/decisions",
+              "and": [ { "dimension": "context", "over": 272000 } ] },
+    "price": { "output_mtok": 0 } }
+]
+```
+
+`price_for(endpoint="/v1/decisions", context=300000)` applies every tier whose conditions all hold, fewer conditions first and then lowest threshold first, so per unit the tier with the most conditions wins and, among those, the highest threshold: input $0.2, output $0. A tier with a named condition always lists it first, so a reader written before named conditions existed, which sees only the first condition and never names an endpoint, never applies one. A named dimension matches only its exact value; a threshold dimension given anything but an int raises `TypeError`. The endpoint tiers come from LiteLLM alone, checked weekly against OpenAI's own Decisions guide by a drift probe (`tests/test_source_probes.py`).
 
 A `context` tier reprices the whole request, not only the tokens past the threshold: the condition classifies the request, and every unit the tier names applies to all of that request's usage, output included. This matches how the providers publish it (Google's Gemini table prices "prompts <= 200k tokens" and "prompts > 200k tokens" as classes of prompt, with output rates keyed on the same prompt size; verified against the published pages 2026-09-25), and it's what `price_for` returns.
 

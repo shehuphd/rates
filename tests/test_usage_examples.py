@@ -111,3 +111,19 @@ def test_alias_recipe():
         assert model.alias.maintained in (True, False, None)
         assert isinstance(model.alias.verified, datetime.date)
         assert isinstance(model.alias.note, str) and model.alias.note
+
+
+def test_endpoint_price_for_recipe():
+    import rates.ai
+
+    registry = rates.ai.load()
+    luna = list(registry.filter(provider="openai", model="gpt-6-luna"))
+    if not luna or not any(
+        c.dimension == "endpoint" for t in luna[0].price_tiers for c in t.conditions
+    ):
+        pytest.skip("no endpoint tier on gpt-6-luna in this snapshot")
+    (luna,) = luna
+    assert luna.price_for(endpoint="/v1/decisions").get("output_mtok") == 0
+    long_input = luna.price_for(endpoint="/v1/decisions", context=500_000).get("input_mtok")
+    assert long_input == luna.price_for(context=500_000).get("input_mtok")
+    assert luna.price_for(endpoint="/v1/decisions", context=500_000).get("output_mtok") == 0

@@ -30,7 +30,9 @@ TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 BACKOFF_SECONDS = (1, 2)
 RETRY_AFTER_CAP = 60
 
-_USER_AGENT = "rates (+https://github.com/shehuphd/rates)"
+# Names the tool and nothing else: no person, handle, or address goes
+# out with a request.
+_USER_AGENT = "rates"
 
 # Module-level so tests can patch the pause out.
 _sleep = time.sleep

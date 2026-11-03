@@ -236,7 +236,8 @@ def test_bearer_token_is_attached_and_absent_when_none(monkeypatch):
     _http.fetch_json("https://example.test/b")
     assert captured[0].get("Authorization") == "Bearer tok123"
     assert "Authorization" not in captured[1]
-    assert all("rates" in h.get("User-agent", "") for h in captured)
+    # The tool's name only: no person, handle, or address leaves with a request.
+    assert all(h.get("User-agent") == "rates" for h in captured)
 
 
 # load() internals
@@ -776,3 +777,87 @@ def test_build_ledger_logs_how_many_unpriced_records_it_excluded(
     out = capsys.readouterr().out
     assert "excluded 2 record(s) with no per-unit pricing (admission criterion 2)" in out
     assert "ledger built: 1 models" in out
+
+
+# Endpoint tiers: a named condition, alone or combined with a threshold
+
+
+LUNA = Model.from_dict(
+    {
+        "provider": "openai",
+        "id": "gpt-6-luna",
+        "type": "chat",
+        "price": {"currency": "USD", "input_mtok": 0.1, "output_mtok": 0.5},
+        "price_tiers": [
+            {"when": {"dimension": "context", "over": 272000},
+             "price": {"input_mtok": 0.2, "output_mtok": 0.75}},
+            {"when": {"dimension": "endpoint", "equals": "/v1/decisions"},
+             "price": {"output_mtok": 0.0}},
+            {"when": {"dimension": "endpoint", "equals": "/v1/decisions",
+                      "and": [{"dimension": "context", "over": 272000}]},
+             "price": {"output_mtok": 0.0}},
+        ],
+    }
+)
+
+
+def test_an_endpoint_tier_applies_only_when_the_caller_names_that_endpoint():
+    assert LUNA.price_for().units == {"input_mtok": 0.1, "output_mtok": 0.5}
+    assert LUNA.price_for(endpoint="/v1/decisions").units == {
+        "input_mtok": 0.1,
+        "output_mtok": 0.0,
+    }
+    # Another endpoint, or the right path spelled differently, is no match.
+    for other in ("/v1/responses", "/v1/decisions/", "decisions"):
+        assert LUNA.price_for(endpoint=other).units == LUNA.price.units, other
+
+
+def test_the_tier_with_more_conditions_wins_where_tiers_overlap():
+    # Past 272k on Decisions: the context tier and the endpoint tier both
+    # match, and the combined tier applies last, so input takes the
+    # long-context rate and output stays free.
+    assert LUNA.price_for(endpoint="/v1/decisions", context=300000).units == {
+        "input_mtok": 0.2,
+        "output_mtok": 0.0,
+    }
+    # Order-independent: the same answer whatever order the tiers are listed in.
+    reordered = Model.from_dict(
+        {**LUNA.to_dict(), "price_tiers": list(reversed(LUNA.to_dict()["price_tiers"]))}
+    )
+    assert reordered.price_for(endpoint="/v1/decisions", context=300000).units == {
+        "input_mtok": 0.2,
+        "output_mtok": 0.0,
+    }
+    # A combined tier never applies on one of its conditions alone.
+    assert LUNA.price_for(context=300000).units == {"input_mtok": 0.2, "output_mtok": 0.75}
+
+
+def test_a_threshold_dimension_given_a_non_int_raises():
+    with pytest.raises(TypeError, match="context is compared against a threshold"):
+        LUNA.price_for(context="300000")
+    with pytest.raises(TypeError):
+        LUNA.price_for(context=True)
+    # A named dimension given a number simply doesn't match.
+    assert LUNA.price_for(endpoint=1).units == LUNA.price.units
+
+
+def test_tiers_round_trip_through_to_dict_in_the_ledger_shape():
+    tiers = LUNA.to_dict()["price_tiers"]
+    assert tiers[0]["when"] == {"dimension": "context", "over": 272000}
+    assert tiers[1]["when"] == {"dimension": "endpoint", "equals": "/v1/decisions"}
+    assert tiers[2]["when"] == {
+        "dimension": "endpoint",
+        "equals": "/v1/decisions",
+        "and": [{"dimension": "context", "over": 272000}],
+    }
+    assert Model.from_dict(LUNA.to_dict()).price_tiers == LUNA.price_tiers
+
+
+def test_a_ledger_tier_written_before_endpoint_tiers_reads_unchanged():
+    t = PriceTier.from_dict({"when": {"dimension": "context", "over": 200000},
+                             "price": {"input_mtok": 10}})
+    assert (t.when_dimension, t.when_over, t.when_equals, t.when_also) == (
+        "context", 200000, None, ()
+    )
+    assert t.to_dict() == {"when": {"dimension": "context", "over": 200000},
+                           "price": {"input_mtok": 10}}

@@ -51,7 +51,7 @@ from ._sources import (
 # observed_at) are UTC instants; a day-only value in any earlier local ledger
 # still reads, floored to midnight UTC. _schema_compatible checks the major, so
 # a later additive field bumps the minor without breaking an older reader.
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"
 DISCREPANCY_THRESHOLD_PCT = 2.0
 
 # The declared strict total order over sources, derived from the
@@ -466,6 +466,11 @@ def _merge_one(
     if not price_tiers and genai and genai.get("price_tiers"):
         price_tiers = genai["price_tiers"]
         contributed.add("genai_prices")
+    # Endpoint tiers come only from LiteLLM; they sit beside the context
+    # tiers above rather than competing with them.
+    if litellm and litellm.get("price_tiers"):
+        price_tiers = [*price_tiers, *litellm["price_tiers"]]
+        contributed.add("litellm")
 
     reasoning = base["reasoning"]
     if reasoning is not None:
@@ -588,7 +593,10 @@ def _admit_fallback_only(
                 "tool_call": None,
                 "structured_output": None,
                 "price": {"currency": "USD", **price},
-                "price_tiers": genai.get("price_tiers") or [],
+                "price_tiers": [
+                    *(genai.get("price_tiers") or []),
+                    *(litellm.get("price_tiers") or []),
+                ],
                 "price_discrepancies": [],
                 "reasoning": None,
                 "lifecycle": {

@@ -12,6 +12,7 @@ source directly (2026-08-22).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .._resolution import SourceCard
@@ -63,6 +64,18 @@ _LITELLM_MTOK_UNITS = {
 }
 
 _MTOK = 1_000_000
+
+# LiteLLM prices a model called through a specific endpoint as a suffix
+# on the per-token keys (output_cost_per_token_decisions), and the same
+# endpoint past a context threshold as both
+# (input_cost_per_token_above_272k_tokens_decisions). Each suffix maps to
+# the endpoint path LiteLLM's supported_endpoints names.
+_LITELLM_ENDPOINT_SUFFIXES = {"_decisions": "/v1/decisions"}
+_LITELLM_CONTEXT_KEY = re.compile(r"^(?P<base>\w+?)_above_(?P<k>\d+)k_tokens$")
+
+# LiteLLM's mode words that name one category twice: decision models are
+# "evaluation" on some rows and "decisions" on others.
+_LITELLM_MODE_TYPES = {"evaluation": "decisions"}
 
 
 def _key(provider: str, model_id: str) -> tuple[str, str]:
@@ -240,14 +253,67 @@ def normalize_litellm(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
         }
         if isinstance(m.get("output_cost_per_second"), (int, float)):
             price["output_per_second"] = m["output_cost_per_second"]
+        mode = m.get("mode")
         records[_key(m["litellm_provider"], model_id)] = {
             "provider": m["litellm_provider"],
             "id": model_id,
-            "type": m.get("mode"),
+            "type": _LITELLM_MODE_TYPES.get(mode, mode) if isinstance(mode, str) else mode,
             "price": price,
+            "price_tiers": _litellm_endpoint_tiers(m, price),
             "deprecation_date": m.get("deprecation_date"),
         }
     return records
+
+
+def _litellm_rates(m: dict[str, Any], suffix: str) -> dict[str, float]:
+    """The ERD-unit rates of every per-token key carrying ``suffix``."""
+    return {
+        unit: round(m[src + suffix] * _MTOK, 10)
+        for src, unit in _LITELLM_MTOK_UNITS.items()
+        if isinstance(m.get(src + suffix), (int, float))
+    }
+
+
+def _litellm_endpoint_tiers(
+    m: dict[str, Any], price: dict[str, float]
+) -> list[dict[str, Any]]:
+    """Endpoint tiers from one LiteLLM entry's suffixed keys, each holding
+    only the units that differ from what applies without the endpoint:
+    the base price for the plain suffix, the same context threshold's
+    rates for a combined one."""
+    tiers: list[dict[str, Any]] = []
+    for suffix, endpoint in _LITELLM_ENDPOINT_SUFFIXES.items():
+        endpoint_rates = _litellm_rates(m, suffix)
+        delta = {u: r for u, r in endpoint_rates.items() if price.get(u) != r}
+        if delta:
+            tiers.append(
+                {"when": {"dimension": "endpoint", "equals": endpoint}, "price": delta}
+            )
+        thresholds = sorted(
+            {
+                int(match["k"])
+                for key in m
+                if key.endswith(suffix)
+                and (match := _LITELLM_CONTEXT_KEY.match(key.removesuffix(suffix)))
+            }
+        )
+        for k in thresholds:
+            context_suffix = f"_above_{k}k_tokens"
+            combined = _litellm_rates(m, context_suffix + suffix)
+            in_force = {**price, **_litellm_rates(m, context_suffix)}
+            delta = {u: r for u, r in combined.items() if in_force.get(u) != r}
+            if delta:
+                tiers.append(
+                    {
+                        "when": {
+                            "dimension": "endpoint",
+                            "equals": endpoint,
+                            "and": [{"dimension": "context", "over": k * 1000}],
+                        },
+                        "price": delta,
+                    }
+                )
+    return tiers
 
 
 def normalize_openrouter(data: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:

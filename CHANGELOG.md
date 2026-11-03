@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0 (2026-11-03)
+
+### Added
+
+- Endpoint price tiers: a tier can apply when a model is called through a named endpoint, alone or combined with a context threshold. OpenAI's `gpt-6-luna` carries one for its Decisions API (`/v1/decisions`), where output tokens aren't charged; `price_for(endpoint="/v1/decisions", context=...)` resolves it, and where tiers overlap the one with more conditions wins. The rates come from LiteLLM's endpoint-suffixed keys and are checked weekly against OpenAI's own Decisions guide.
+- `rates.ai.TierCondition`, one condition of a tier (`dimension` with `over` or `equals`), and `PriceTier.conditions`, every condition a tier applies under. `PriceTier` gains `when_equals` and `when_also`.
+- `rates ai show` lists each tier with its conditions (`on endpoint /v1/decisions, past 272,000 context: ...`).
+
+### Changed
+
+- Decision models are typed `decisions`, replacing `evaluation`: TypeSafe's Jev records carry it, and LiteLLM's `evaluation` mode reads as `decisions`, since LiteLLM uses both words for the category.
+- `price_for()` raises `TypeError` when a threshold dimension such as `context` is given anything but an int.
+- Requests identify themselves with the User-Agent `rates` and nothing else.
+- Ledger `schema_version` 1.2.0 for the additive tier fields (`equals`, `and`); 1.x readers still load it, and since a tier with a named condition lists it first, a reader that predates them never applies one.
+
 ## 1.2.0 (2026-11-03)
 
 ### Added

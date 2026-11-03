@@ -1,6 +1,6 @@
 # Manifest
 
-Last updated: 2026-11-03 07:41:21 UTC
+Last updated: 2026-11-03 22:02:31 UTC
 
 One entry per current source file: what it defines and what it touches. A map for orienting in the codebase, not a second copy of the docstrings.
 
@@ -22,10 +22,10 @@ One entry per current source file: what it defines and what it touches. A map fo
 | `ai/_freshness.py` | Per-source commit-history freshness lookups for the ladder's freshness rung, with a one-hour on-disk cache. Network through `urllib` directly; every failure degrades to `None`. |
 | `ai/_fusion.py` | `fetch_sources()` and `fuse()`: per-source degradation, admission criteria, origin-record merge, discrepancy notes, the envelope (`SCHEMA_VERSION`, sources, resolution scorecards). |
 | `ai/_load.py` | The three fetch tiers (`bundled`/`stable`/`live`), ledger download and cache handling, and the warnings each tier emits (bundled-snapshot notice, staleness, stable fallback, skipped sources). |
-| `ai/_model.py` | `Model`: typed view of one record, `price_for()` tier resolution, `to_dict()`. |
+| `ai/_model.py` | `Model`: typed view of one record, `price_for()` tier resolution over `PriceTier` and `TierCondition` (thresholds and named endpoints), `to_dict()`. |
 | `ai/_origins.py` | Origin page sources: `ORIGIN_URLS`/`ORIGIN_CARDS`, `UNIT_REGISTRY` with dated per-vendor unit verifications, one parser per vendor page (Deepgram markdown or embedded JSON-LD, AssemblyAI markdown, ElevenLabs markdown, LiveKit HTML, TypeSafe markdown), shape qualification, `normalize_origins()`. Pure over fetched text; no I/O. |
 | `ai/_registry.py` | `Registry`: `from_dict`, `filter()`, `sort_by()`, `price_units()`, envelope accessors. |
-| `ai/_sources.py` | The four feed sources: `SOURCE_URLS`, `SOURCE_CARDS`, one normalizer per feed. Pure over fetched payloads. |
+| `ai/_sources.py` | The four feed sources: `SOURCE_URLS`, `SOURCE_CARDS`, one normalizer per feed (LiteLLM's also reads endpoint-suffixed keys into endpoint tiers and maps its `evaluation` mode to `decisions`). Pure over fetched payloads. |
 | `ai/ledger-ai.json.gz` | The bundled ledger snapshot, rebuilt weekly by the ledger workflow. Never hand-edited. |
 | `py.typed` | PEP 561 marker; the package ships its type hints. |
 
@@ -57,7 +57,7 @@ One entry per current source file: what it defines and what it touches. A map fo
 | `tests/test_origins.py` | Origin parsers against recorded fixtures, hostile-input qualification, `normalize_origins` statuses, fusion admission of origin rows. |
 | `tests/test_registry.py` | `Registry` filtering, sorting, and envelope accessors. |
 | `tests/test_resolution.py` | The ladder rung by rung: which candidate wins, the deciding rung, skip semantics, intra-rung ties, and the registry-order floor. |
-| `tests/test_source_probes.py` | Live drift probes: each feed still serves the shape its normalizer expects. |
+| `tests/test_source_probes.py` | Live drift probes: each feed still serves the shape its normalizer expects, and LiteLLM's Decisions rates still match OpenAI's Decisions guide. |
 | `tests/test_trace.py` | The traceact shim: identity when traceact is absent, and a decorated function's result left alone either way. |
 | `tests/test_usage_examples.py` | Python API recipes from USAGE.md, restated as tests against the bundled ledger. |
 | `tests/test_version.py` | `__version__` matches pyproject. |

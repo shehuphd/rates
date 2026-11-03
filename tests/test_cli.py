@@ -1089,3 +1089,40 @@ def test_info_says_when_the_snapshot_is_past_the_staleness_threshold(capsys):
     _cli._render_info({"ai": old}, as_json=False)
     out = capsys.readouterr().out
     assert "past the 28-day threshold; refresh with --fetch stable or --fetch live" in out
+
+
+def test_show_renders_endpoint_and_combined_tiers(capsys, monkeypatch):
+    registry = Registry.from_dict(
+        {
+            "schema_version": "1.2.0",
+            "snapshot_date": "2026-11-03",
+            "models": [
+                {
+                    "provider": "openai",
+                    "id": "gpt-6-luna",
+                    "type": "chat",
+                    "price": {"currency": "USD", "input_mtok": 0.1, "output_mtok": 0.5},
+                    "price_tiers": [
+                        {"when": {"dimension": "context", "over": 272000},
+                         "price": {"input_mtok": 0.2}},
+                        {"when": {"dimension": "endpoint", "equals": "/v1/decisions"},
+                         "price": {"output_mtok": 0.0}},
+                        {"when": {"dimension": "endpoint", "equals": "/v1/decisions",
+                                  "and": [{"dimension": "context", "over": 272000}]},
+                         "price": {"output_mtok": 0.0}},
+                    ],
+                    "lifecycle": {"status": "active"},
+                }
+            ],
+        }
+    )
+    monkeypatch.setattr(
+        _cli, "_loader",
+        lambda domain: lambda fetch="bundled", timeout=None, force=False: registry,
+    )
+    code, out, _ = run(capsys, "ai", "show", "openai/gpt-6-luna")
+    assert code == 0
+    lines = [line.strip() for line in out.splitlines()]
+    assert "past 272,000 context: input_mtok: 0.2" in lines
+    assert "on endpoint /v1/decisions: output_mtok: 0" in lines
+    assert "on endpoint /v1/decisions, past 272,000 context: output_mtok: 0" in lines

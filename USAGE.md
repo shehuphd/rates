@@ -346,12 +346,22 @@ opus.lifecycle.deprecation_date     # datetime.date or None
 opus.to_dict()                      # the record as ledger-shaped JSON
 ```
 
-Some models reprice past a usage threshold (long-context tiers). `price` is always the base tier; `price_for()` resolves the price under stated conditions:
+Some models reprice past a usage threshold (long-context tiers), or when called through a particular endpoint. `price` is always the base tier; `price_for()` resolves the price under stated conditions:
 
 ```python
 model.price.get("input_mtok")                       # base rate
 model.price_for(context=500_000).get("input_mtok")  # rate with tier overrides applied
 ```
+
+An endpoint is named by its API path. OpenAI's `gpt-6-luna` doesn't charge for output tokens on its Decisions API, and charges its long-context input rate there past 272k tokens:
+
+```python
+(luna,) = registry.filter(provider="openai", model="gpt-6-luna")
+luna.price_for(endpoint="/v1/decisions").get("output_mtok")                   # 0
+luna.price_for(endpoint="/v1/decisions", context=500_000).get("input_mtok")  # long-context rate
+```
+
+Where tiers overlap, the one with more conditions wins: past 272k on Decisions, output is still free. `rates ai show` lists each tier with its conditions.
 
 Where sources disagreed about a price by more than 2%, the disagreement is stored on the record rather than discarded. Which value ships is decided by a fixed resolution ladder (a source that is first-party for the record's provider would end the contest, though no price-carrying feed is one today; then freshest update evidence, down to a declared order that can never tie); every note's `chosen_value` is the value that shipped in `price`, however many sources disagreed, and `resolved_by` names the deciding rung:
 

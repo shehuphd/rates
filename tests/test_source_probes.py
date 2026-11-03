@@ -9,10 +9,11 @@ cycle.
 """
 
 import os
+import re
 
 import pytest
 
-from rates._http import fetch_json
+from rates._http import fetch_json, fetch_text
 from rates.ai._sources import SOURCE_URLS
 
 pytestmark = pytest.mark.live
@@ -178,3 +179,39 @@ def test_openrouter_shape_still_holds(token):
         "OpenRouter architecture modality arrays are gone; update "
         "normalize_openrouter"
     )
+
+
+# OpenAI's own statement of Decisions pricing. The endpoint tier on
+# gpt-6-luna comes from LiteLLM's *_decisions keys alone; this checks
+# them weekly against the vendor's guide.
+OPENAI_DECISIONS_GUIDE = "https://developers.openai.com/api/docs/guides/decisions.md"
+
+
+def test_litellm_decisions_rates_still_match_openais_decisions_guide(token):
+    fix = (
+        "; update _LITELLM_ENDPOINT_SUFFIXES in rates/ai/_sources.py, "
+        "ERD.md's price-tier section, and this probe"
+    )
+    page = fetch_text(OPENAI_DECISIONS_GUIDE)
+    _, found, rest = page.partition("## Pricing and availability")
+    assert found, "OpenAI's Decisions guide no longer has its pricing section" + fix
+    pricing = rest.split("\n## ", 1)[0]
+    rate = re.search(r"uncached input costs \*\*\$([0-9.]+) per 1M tokens\*\*", pricing)
+    assert rate, "the guide no longer states the uncached input rate" + fix
+    assert "Output tokens are not charged" in pricing, (
+        "the guide no longer says Decisions output is free" + fix
+    )
+    assert "rates match the" in pricing and "prompt caching rates" in pricing, (
+        "the guide no longer ties Decisions cache rates to the standard ones" + fix
+    )
+
+    luna = fetch_json(SOURCE_URLS["litellm"], token=token).get("gpt-6-luna") or {}
+    assert luna.get("output_cost_per_token_decisions") == 0, (
+        "LiteLLM's gpt-6-luna no longer prices Decisions output at 0" + fix
+    )
+    assert luna.get("input_cost_per_token_decisions", 0) * 1_000_000 == pytest.approx(
+        float(rate.group(1))
+    ), "LiteLLM's Decisions input rate no longer matches the guide" + fix
+    assert luna.get("cache_read_input_token_cost_decisions") == luna.get(
+        "cache_read_input_token_cost"
+    ), "LiteLLM's Decisions cache-read rate no longer matches the standard one" + fix

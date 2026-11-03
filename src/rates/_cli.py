@@ -921,7 +921,13 @@ def _render_show(
             overrides = ", ".join(
                 f"{u}: {_fmt_rate(r)}" for u, r in sorted(tier.price.items())
             )
-            print(f"  past {tier.when_over:,} {tier.when_dimension}: {overrides}")
+            when = ", ".join(
+                f"on {c.dimension} {c.equals}"
+                if c.equals is not None
+                else f"past {c.over or 0:,} {c.dimension}"
+                for c in tier.conditions
+            )
+            print(f"  {when}: {overrides}")
         if m.reasoning:
             r = m.reasoning
             _kv("reasoning", r.control or "yes")

@@ -195,7 +195,7 @@ def test_typesafe_fixture_yields_each_versioned_model_and_its_aliases():
         "jev-preview",
     ]
     for record in records:
-        assert record["type"] == "evaluation"
+        assert record["type"] == "decisions"
         assert record["modalities"] == {"input": ["text"], "output": ["text"]}
         # Output is $0 because the page states the tokens are free in
         # words; the zero is a carried value here, never a parse artifact.

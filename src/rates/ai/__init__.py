@@ -11,6 +11,7 @@ from ._model import (
     PriceTier,
     Reasoning,
     ReasoningLevel,
+    TierCondition,
 )
 from ._registry import Registry, Source
 
@@ -26,5 +27,6 @@ __all__ = [
     "ReasoningLevel",
     "Registry",
     "Source",
+    "TierCondition",
     "load",
 ]

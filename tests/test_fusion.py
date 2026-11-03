@@ -848,3 +848,122 @@ def test_litellm_price_disagreement_is_recorded_and_the_ladder_decides():
     assert d["other_value"] == pytest.approx(6.0)
     assert d["chosen_source"] == "models_dev"
     assert d["resolved_by"] == "coverage"
+
+
+# Endpoint tiers from LiteLLM's suffixed keys
+
+LUNA_LITELLM = {
+    "gpt-6-luna": {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 1e-08,
+        "input_cost_per_token_above_272k_tokens": 2e-07,
+        "output_cost_per_token_above_272k_tokens": 7.5e-07,
+        "input_cost_per_token_decisions": 1e-07,
+        "output_cost_per_token_decisions": 0.0,
+        "cache_read_input_token_cost_decisions": 1e-08,
+        "input_cost_per_token_above_272k_tokens_decisions": 2e-07,
+        "output_cost_per_token_above_272k_tokens_decisions": 0.0,
+        "supported_endpoints": ["/v1/chat/completions", "/v1/decisions"],
+    },
+}
+
+
+def test_litellm_decisions_keys_become_endpoint_tiers_holding_only_what_differs():
+    (record,) = normalize_litellm(LUNA_LITELLM).values()
+    # Input and cache rates on Decisions equal the plain ones, so only the
+    # output rate is a change; past 272k it's compared against the
+    # long-context rates, where input matches and output doesn't.
+    assert record["price_tiers"] == [
+        {"when": {"dimension": "endpoint", "equals": "/v1/decisions"},
+         "price": {"output_mtok": 0.0}},
+        {"when": {"dimension": "endpoint", "equals": "/v1/decisions",
+                  "and": [{"dimension": "context", "over": 272000}]},
+         "price": {"output_mtok": 0.0}},
+    ]
+
+
+def test_every_endpoint_tier_leads_with_its_named_condition():
+    # A reader that predates endpoint tiers sees only a tier's first
+    # condition and never names an endpoint, so it can never match one
+    # of these tiers and misprice a plain call.
+    for entry in (LUNA_LITELLM, LITELLM):
+        for record in normalize_litellm(entry).values():
+            for tier in record["price_tiers"]:
+                assert "equals" in tier["when"], tier
+
+
+def test_litellm_entries_without_endpoint_keys_carry_no_tiers():
+    # A Decisions rate equal to the plain one is no tier either.
+    same = {"m": {"litellm_provider": "openai", "input_cost_per_token": 1e-07,
+                  "input_cost_per_token_decisions": 1e-07,
+                  "output_cost_per_token_decisions": "free"}}
+    assert normalize_litellm(same)[("openai", "m")]["price_tiers"] == []
+    assert all(r["price_tiers"] == [] for r in normalize_litellm(LITELLM).values())
+
+
+def test_litellm_evaluation_mode_reads_as_the_decisions_type():
+    entries = {
+        "a": {"litellm_provider": "parallel_ai", "mode": "evaluation"},
+        "b": {"litellm_provider": "baseten", "mode": "decisions"},
+        "c": {"litellm_provider": "openai", "mode": "chat"},
+    }
+    types = {k[1]: r["type"] for k, r in normalize_litellm(entries).items()}
+    assert types == {"a": "decisions", "b": "decisions", "c": "chat"}
+
+
+def test_fused_row_carries_context_tiers_and_litellm_endpoint_tiers():
+    fused = fuse(
+        _payloads(
+            models_dev={
+                "openai": {
+                    "models": {
+                        "gpt-6-luna": {
+                            "id": "gpt-6-luna",
+                            "cost": {
+                                "input": 0.1,
+                                "output": 0.5,
+                                "cache_read": 0.01,
+                                "tiers": [{"input": 0.2, "output": 0.75,
+                                           "tier": {"type": "context", "size": 272000}}],
+                            },
+                            "reasoning": False,
+                        }
+                    }
+                }
+            },
+            litellm=LUNA_LITELLM,
+        )
+    )
+    row = _model(fused, "gpt-6-luna")
+    assert [t["when"] for t in row["price_tiers"]] == [
+        {"dimension": "context", "over": 272000},
+        {"dimension": "endpoint", "equals": "/v1/decisions"},
+        {"dimension": "endpoint", "equals": "/v1/decisions",
+         "and": [{"dimension": "context", "over": 272000}]},
+    ]
+    assert "litellm" in row["sources"]
+    (model,) = Registry.from_dict(fused).filter(model="gpt-6-luna")
+    assert model.price_for(endpoint="/v1/decisions", context=300000).units == {
+        "input_mtok": 0.2,
+        "output_mtok": 0.0,
+        "cache_read_mtok": 0.01,
+    }
+    assert model.price.units["output_mtok"] == 0.5
+
+
+def test_a_fallback_admitted_row_carries_litellm_endpoint_tiers_too():
+    litellm = {
+        **LITELLM,
+        "mistral/mistral-large": {
+            **LITELLM["mistral/mistral-large"],
+            "output_cost_per_token_decisions": 0.0,
+        },
+    }
+    row = _model(fuse(_payloads(litellm=litellm)), "mistral-large")
+    assert row["price_tiers"] == [
+        {"when": {"dimension": "endpoint", "equals": "/v1/decisions"},
+         "price": {"output_mtok": 0.0}},
+    ]

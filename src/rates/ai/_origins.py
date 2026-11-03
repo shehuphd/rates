@@ -19,7 +19,7 @@ build prints a per-source delta report against the previous snapshot.
 
 Records stay within the signed scope: base model unit rates for
 speech-to-text and text-to-speech, and TypeSafe's per-token
-evaluation-model rates (the versioned model and the aliases the page
+decision-model rates (the versioned model and the aliases the page
 publishes beside it, an alias row at its target's price).
 Add-on rates (diarization, medical
 mode, redaction), voice-agent bundles, subscription plans, and rows
@@ -118,9 +118,9 @@ _MODALITIES = {
     "audio_transcription": {"input": ["audio"], "output": ["text"]},
     "audio_speech": {"input": ["text"], "output": ["audio"]},
     # A decision model takes text state and questions and returns typed
-    # judgments; "evaluation" is the mode word LiteLLM already uses for
-    # the category.
-    "evaluation": {"input": ["text"], "output": ["text"]},
+    # judgments; "decisions" is the mode word LiteLLM uses for the
+    # category (its older rows say "evaluation", mapped to the same type).
+    "decisions": {"input": ["text"], "output": ["text"]},
 }
 
 
@@ -519,7 +519,7 @@ def parse_typesafe(text: str, today: str) -> list[dict[str, Any]]:
     # label's position, never by its place in the row, and the price
     # note must say input tokens are charged, or no row ships. Jev
     # models judge text against supplied options, the ledger's
-    # evaluation type.
+    # decisions type.
     section = _markdown_section(text, "current models")
     if section is None:
         return []
@@ -564,7 +564,7 @@ def parse_typesafe(text: str, today: str) -> list[dict[str, Any]]:
                 _record(
                     "typesafe",
                     model_id.group(1),
-                    "evaluation",
+                    "decisions",
                     price,
                     "typesafe_pricing",
                     today,
@@ -587,7 +587,7 @@ def parse_typesafe(text: str, today: str) -> list[dict[str, Any]]:
                 _record(
                     "typesafe",
                     alias,
-                    "evaluation",
+                    "decisions",
                     price,
                     "typesafe_pricing",
                     today,
