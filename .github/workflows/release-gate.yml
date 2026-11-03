@@ -6,17 +6,11 @@ name: release gate
 # only) with no secrets configured.
 #
 # AUDIT_API_KEY and AUDIT_FALLBACK_API_KEY are each a single "<provider>/<key>"
-# string, and either can name any provider. The provider prefix drives two
-# lookups:
-#   - the agent CLI that runs the call, resolved inside the reusable gate;
-#   - the audit model, which is named differently per provider, so it can't
-#     be one fixed input.
-# The select-model job below is the model adapter: for each supplied key it
-# reads whatever provider is given and looks up its model in the repo
-# variable AUDIT_MODEL_<PROVIDER> (uppercased provider). No provider is
-# named or assumed here; adding one is a repo-variable entry, not an edit.
-# A key whose provider the reusable gate has no agent CLI for is reported
-# there, not guessed at here.
+# string, and either can name any provider. No model is named here: with the
+# model inputs left empty, the reusable gate verifies each key live through
+# keycall and runs the audit on the model the key's own catalog answers with.
+# The audit runs on AUDIT_API_KEY first; AUDIT_FALLBACK_API_KEY takes over
+# when that attempt dies mid-run.
 
 # Manual for now, matching ci.yml, while the account's Actions minutes are
 # limited. Enable pull_request to gate every merge once they're available:
@@ -28,54 +22,7 @@ on:
 permissions: {}
 
 jobs:
-  select-model:
-    name: Route the audit model by provider
-    runs-on: ubuntu-latest
-    outputs:
-      model: ${{ steps.pick.outputs.model }}
-      fallback-model: ${{ steps.pick.outputs.fallback-model }}
-    steps:
-      - id: pick
-        env:
-          PRIMARY_KEY: ${{ secrets.AUDIT_API_KEY }}
-          FALLBACK_KEY: ${{ secrets.AUDIT_FALLBACK_API_KEY }}
-          # Every repo variable as one JSON object, so a variable named for
-          # the provider (AUDIT_MODEL_<PROVIDER>) can be looked up by a name
-          # computed at runtime rather than referenced statically.
-          VARS_JSON: ${{ toJSON(vars) }}
-        run: |
-          set -euo pipefail
-          # "<provider>/<key>" -> its audit model, or "" when the key is
-          # unset. The key itself is never printed; GitHub masks it. Any
-          # provider works: the model comes from AUDIT_MODEL_<PROVIDER>, so
-          # adding a provider is a repo-variable entry, not a change here.
-          model_for() {  # $1 key, $2 secret-name-for-messages
-            key="$1"
-            label="$2"
-            if [ -z "$key" ]; then
-              printf ''
-              return 0
-            fi
-            if [ "${key%%/*}" = "$key" ]; then
-              echo "::error::$label must be '<provider>/<key>'" >&2
-              return 1
-            fi
-            provider="$(printf '%s' "${key%%/*}" | tr '[:upper:]' '[:lower:]')"
-            var_name="AUDIT_MODEL_$(printf '%s' "$provider" | tr '[:lower:]' '[:upper:]')"
-            model="$(printf '%s' "$VARS_JSON" | jq -r --arg k "$var_name" '.[$k] // ""')"
-            if [ -z "$model" ]; then
-              echo "::error::$label names provider '$provider'; set repo variable $var_name to the audit model in $provider's own naming" >&2
-              return 1
-            fi
-            printf '%s' "$model"
-          }
-          primary_model="$(model_for "${PRIMARY_KEY:-}" AUDIT_API_KEY)"
-          fallback_model="$(model_for "${FALLBACK_KEY:-}" AUDIT_FALLBACK_API_KEY)"
-          echo "model=$primary_model" >> "$GITHUB_OUTPUT"
-          echo "fallback-model=$fallback_model" >> "$GITHUB_OUTPUT"
-
   gate:
-    needs: select-model
     # A called workflow can't hold more than its caller grants, and the
     # top level grants nothing: the gate's jobs read the checkout, and its
     # audit job opens an issue in this repo when the audit fails.
@@ -86,8 +33,6 @@ jobs:
     with:
       shiplock-spec: "shiplock>=0.3.1"
       run-audit: true
-      audit-model: ${{ needs.select-model.outputs.model }}
-      audit-fallback-model: ${{ needs.select-model.outputs.fallback-model }}
     secrets:
       AUDIT_API_KEY: ${{ secrets.AUDIT_API_KEY }}
       AUDIT_FALLBACK_API_KEY: ${{ secrets.AUDIT_FALLBACK_API_KEY }}
