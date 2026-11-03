@@ -186,9 +186,14 @@ def test_elevenlabs_fixture_keeps_speech_and_drops_the_rest():
     assert types == {"audio_speech", "audio_transcription"}
 
 
-def test_typesafe_fixture_yields_the_versioned_model_and_its_aliases():
+def test_typesafe_fixture_yields_each_versioned_model_and_its_aliases():
     records = parse_typesafe(_page("typesafe.md"), TODAY)
-    assert [r["id"] for r in records] == ["jev-1.13.0", "jev-latest", "jev-preview"]
+    assert [r["id"] for r in records] == [
+        "jev-1.14.0",
+        "jev-1.13.0",
+        "jev-latest",
+        "jev-preview",
+    ]
     for record in records:
         assert record["type"] == "evaluation"
         assert record["modalities"] == {"input": ["text"], "output": ["text"]}
@@ -256,6 +261,46 @@ def test_typesafe_drops_an_alias_whose_target_is_not_priced():
         "| `jev-preview` | `jev-2.0.0-preview` |\n"
     )
     assert [r["id"] for r in parse_typesafe(page, TODAY)] == ["jev-1.13.0"]
+
+
+def test_typesafe_one_table_per_model_form_still_parses():
+    # The page's form through 2026-10-09: a two-column table per model,
+    # the id in the header, the note saying "Charged per input token".
+    records = parse_typesafe(_page("typesafe-2026-10-09.md"), TODAY)
+    assert [r["id"] for r in records] == ["jev-1.13.0", "jev-latest", "jev-preview"]
+    assert {r["price"]["input_mtok"] for r in records} == {0.042}
+
+
+def test_typesafe_takes_each_model_column_its_own_figure():
+    page = (
+        "## Current models\n"
+        "| | Jev 2 | Jev 1 |\n| :- | :- | :- |\n"
+        "| Model ID | `jev-2.0.0` | `jev-1.0.0` |\n"
+        "| Price (per Btok / per Mtok) | $50 / $0.05 | $42 / $0.042 |\n\n"
+        "* **Price:** You pay per input token.\n\n"
+        "## Aliases\n"
+        "| Alias | Points to | Meaning |\n| :- | :- | :- |\n"
+        "| `jev-latest` | `jev-1.0.0` | Stable. |\n"
+    )
+    prices = {r["id"]: r["price"]["input_mtok"] for r in parse_typesafe(page, TODAY)}
+    # An alias takes its own target's figure, not the first column's.
+    assert prices == {"jev-2.0.0": 0.05, "jev-1.0.0": 0.042, "jev-latest": 0.042}
+
+
+def test_typesafe_column_form_without_ids_or_with_a_short_row_ships_nothing():
+    # Display names alone, no Model ID row: no column names an id.
+    no_ids = (
+        "## Current models\n"
+        "| | Jev 2 | Jev 1 |\n| :- | :- | :- |\n"
+        "| Price (per Btok / per Mtok) | $50 / $0.05 | $42 / $0.042 |\n\n"
+        "* **Price:** You pay per input token.\n"
+    )
+    assert parse_typesafe(no_ids, TODAY) == []
+    # A price row one cell short prices the first model only.
+    short = no_ids.replace(
+        "| Price", "| Model ID | `jev-2.0.0` | `jev-1.0.0` |\n| Price"
+    ).replace("$50 / $0.05 | $42 / $0.042 |", "$50 / $0.05 |")
+    assert [r["id"] for r in parse_typesafe(short, TODAY)] == ["jev-2.0.0"]
 
 
 def test_livekit_fixture_keeps_entry_plan_stt_only():
@@ -400,20 +445,73 @@ def test_an_origin_row_survives_registry_round_trip():
     assert all(m.type == "audio_transcription" for m in hits)
 
 
-# Deepgram's two served forms.
+# Deepgram's served forms.
 
 
 def test_deepgram_markdown_and_html_forms_yield_identical_records():
     # The vendor serves markdown on content negotiation or HTML with
     # embedded offer data; whichever arrives, the same records ship.
-    markdown = parse_deepgram(_page("deepgram.md"), TODAY)
+    # Both fixtures carry the rates of early October 2026.
+    markdown = parse_deepgram(_page("deepgram-2026-10-09.md"), TODAY)
     html = parse_deepgram(_page("deepgram.html"), TODAY)
     assert markdown == html
     assert len(markdown) == 8
 
 
-def test_deepgram_markdown_takes_the_current_rate_not_the_struck_one():
+def test_deepgram_current_page_yields_exactly_the_pay_as_you_go_model_rates():
     records = parse_deepgram(_page("deepgram.md"), TODAY)
+    prices = {
+        (r["id"], r["type"]): {u: v for u, v in r["price"].items() if u != "currency"}
+        for r in records
+    }
+    # Every other figure on the page (Growth, add-ons, voice-agent
+    # bundles, per-hour restatements, the FAQ's hourly figure) stays out.
+    assert prices == {
+        ("aura-1", "audio_speech"): {"kchar": 0.015},
+        ("aura-2", "audio_speech"): {"kchar": 0.03},
+        ("flux-stt-english", "audio_transcription"): {"streaming_audio_minute": 0.0077},
+        ("flux-stt-multilingual", "audio_transcription"): {
+            "streaming_audio_minute": 0.0078
+        },
+        ("flux-tts", "audio_speech"): {"kchar": 0.045},
+        ("nova-3-monolingual", "audio_transcription"): {
+            "streaming_audio_minute": 0.0077,
+            "audio_minute": 0.0043,
+        },
+        ("nova-3-multilingual", "audio_transcription"): {
+            "streaming_audio_minute": 0.0092,
+            "audio_minute": 0.0052,
+        },
+        ("whisper-large", "audio_transcription"): {"audio_minute": 0.0048},
+    }
+
+
+def test_deepgram_reads_pay_as_you_go_by_its_header_not_its_place():
+    reordered = (
+        "### Speech-to-text\n##### Streaming\n"
+        "| API | Growth | Pay as you go |\n| --- | --- | --- |\n"
+        "| Nova-3 Monolingual | $0.0065 / min | $0.0077 / min |\n"
+    )
+    (record,) = parse_deepgram(reordered, TODAY)
+    assert record["price"] == {"currency": "USD", "streaming_audio_minute": 0.0077}
+    # A table with no Pay as you go column contributes nothing.
+    growth_only = reordered.replace("| Pay as you go |", "| Enterprise |")
+    assert parse_deepgram(growth_only, TODAY) == []
+
+
+def test_deepgram_add_on_tables_never_ship_even_under_a_model_name():
+    # An add-on table nested under Speech-to-text is skipped by its
+    # heading, so even a row the model-name gate would pass stays out.
+    page = (
+        "### Speech-to-text\n#### Speech-to-text add-ons\n##### Streaming\n"
+        "| API | Pay as you go |\n| --- | --- |\n"
+        "| Nova-3 Redaction | $0.0020 / min |\n"
+    )
+    assert parse_deepgram(page, TODAY) == []
+
+
+def test_deepgram_markdown_takes_the_current_rate_not_the_struck_one():
+    records = parse_deepgram(_page("deepgram-2026-10-09.md"), TODAY)
     by_id = {r["id"]: r for r in records}
     # Flux English's cell reads "$0.0065/min ~~$0.0077/min~~": the
     # struck price is the earlier one and never ships.

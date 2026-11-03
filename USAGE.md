@@ -143,7 +143,7 @@ Among the vendors read from their own pricing pages, the speech vendors (Deepgra
 | Unit | What it counts | Example |
 |---|---|---|
 | `audio_minute` | A minute of pre-recorded audio, transcribed as a batch | `deepgram/nova-3-monolingual` |
-| `streaming_audio_minute` | A minute of audio transcribed over a stream | `deepgram/flux-english` |
+| `streaming_audio_minute` | A minute of audio transcribed over a stream | `deepgram/flux-stt-english` |
 | `session_minute` | A minute of open streaming connection, whether or not audio flows | `assemblyai/u3-rt-pro` |
 | `kchar` | 1,000 characters of text turned into speech | `elevenlabs/v3` |
 

@@ -1,5 +1,5 @@
 """Capability-drift probes: each origin vendor's live page still parses
-into records for that vendor, of the speech types.
+into records for that vendor, of the types origin records carry.
 
 These hit the pages raw. A failing probe is the notification that the
 vendor's page changed shape: update the matching parser in

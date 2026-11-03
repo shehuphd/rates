@@ -74,7 +74,7 @@ UNIT_REGISTRY: dict[str, dict[str, Any]] = {
     "audio_minute": {
         "counts": "one minute of audio submitted for batch transcription",
         "verified": {
-            "deepgram": "2026-10-09",  # pricing page: Pre-Recorded $/minute table
+            "deepgram": "2026-11-03",  # pricing page: Pre-recorded table, $/min, billed per second of audio
             "assemblyai": "2026-09-26",  # pricing page: per hour of audio submitted
             "elevenlabs": "2026-09-26",  # pricing page: Scribe v2 price per hour
         },
@@ -82,7 +82,7 @@ UNIT_REGISTRY: dict[str, dict[str, Any]] = {
     "streaming_audio_minute": {
         "counts": "one minute of audio processed over a streaming connection",
         "verified": {
-            "deepgram": "2026-10-09",  # pricing page: Streaming $/minute table
+            "deepgram": "2026-11-03",  # pricing page: Streaming table, $/min, billed per second of audio
             "livekit": "2026-09-26",  # vendor docs: STT billed by audio duration
         },
     },
@@ -96,20 +96,20 @@ UNIT_REGISTRY: dict[str, dict[str, Any]] = {
     "kchar": {
         "counts": "1,000 characters of input text synthesized to speech",
         "verified": {
-            "deepgram": "2026-10-09",  # pricing page: $/1k characters
+            "deepgram": "2026-11-03",  # pricing page: billed per 1,000 characters of input text
             "elevenlabs": "2026-09-26",  # pricing page: price per 1K characters
         },
     },
     "input_mtok": {
         "counts": "one million input tokens",
         "verified": {
-            "typesafe": "2026-10-09",  # models page: charged per input token, per Mtok
+            "typesafe": "2026-11-03",  # models page: you pay per input token, per Mtok
         },
     },
     "output_mtok": {
         "counts": "one million output tokens",
         "verified": {
-            "typesafe": "2026-10-09",  # models page: output tokens are free
+            "typesafe": "2026-11-03",  # models page: output tokens are free
         },
     },
 }
@@ -186,7 +186,8 @@ def _well_formed(
 # --- Deepgram: the pricing page in either form it serves -------------------
 
 # The page arrives as markdown on content negotiation (observed from
-# 2026-10-09) or as HTML with schema.org offer data embedded (the form
+# 2026-10-09; its headings and rate spelling were redesigned by
+# 2026-11-02) or as HTML with schema.org offer data embedded (the form
 # through 2026-10-05); the parser reads whichever came. Only these model
 # families are transcription or synthesis models; other names in the
 # same sections are feature add-on rates (redaction, diarization) or
@@ -196,54 +197,67 @@ def _well_formed(
 # check both work from extracted rows.
 _DEEPGRAM_STT = re.compile(r"^(nova|whisper|flux)\b")
 _DEEPGRAM_TTS = re.compile(r"^(aura|flux-tts)")
-# A rate cell's current price; a struck-through "was" price (~~$x/min~~)
-# is removed before this looks.
-_DEEPGRAM_MIN = re.compile(r"\$([0-9.]+)/min\b")
-_DEEPGRAM_KCHAR = re.compile(r"\$([0-9.]+)/1k characters\b")
+# A rate cell's current price, spaced or not ("$0.0077 / min",
+# "$0.0065/min"); a struck-through "was" price (~~$x/min~~) is removed
+# before this looks. A cell must name its own denominator, so per-hour
+# restatements of the same rates never match.
+_DEEPGRAM_MIN = re.compile(r"\$([0-9.]+)\s*/\s*min\b")
+_DEEPGRAM_KCHAR = re.compile(r"\$([0-9.]+)\s*/\s*1k characters\b")
+_MARKDOWN_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*$")
+
+
+def _heading_key(text: str) -> str:
+    """A heading or column label as a comparison key: casefolded,
+    hyphens read as spaces, runs of space collapsed ("Speech-to-text"
+    and "Speech to Text" are one heading)."""
+    return " ".join(text.replace("-", " ").casefold().split())
 
 
 def _parse_deepgram_markdown(text: str) -> dict[tuple[str, str], dict[str, float]]:
-    """Model rates from the markdown form: $/minute tables under the
-    Streaming and Pre-Recorded headings of Speech to Text, and the Text
-    to Speech table. $/hour tables restate the same rates in another
-    denominator, and add-on and voice-agent tables fail the model-name
-    gate; none of those contribute."""
+    """Model rates from the markdown form, at whatever depth the page
+    nests its headings: per-minute rates under a Speech to Text heading
+    (Streaming or Pre-recorded beneath it) and per-1k-character rates
+    under Text to Speech, each read from the table's Pay as you go
+    column, found by its header. Add-on tables are skipped by heading,
+    voice-agent and audio-intelligence tables sit under neither heading,
+    and a table with no Pay as you go column contributes nothing."""
     prices: dict[tuple[str, str], dict[str, float]] = {}
-    section = subsection = denominator = ""
+    path: dict[int, str] = {}  # heading level -> heading key
+    payg_col: int | None = None
+    in_table = False
     for line in text.splitlines():
-        if line.startswith("## "):
-            section, subsection, denominator = line[3:].strip().casefold(), "", ""
-            continue
-        if line.startswith("### "):
-            subsection, denominator = line[4:].strip().casefold(), ""
-            continue
-        if line.startswith("#### "):
-            denominator = line[5:].strip().casefold()
-            continue
+        if heading := _MARKDOWN_HEADING.match(line):
+            level = len(heading.group(1))
+            path = {depth: key for depth, key in path.items() if depth < level}
+            path[level] = _heading_key(heading.group(2))
         if not line.startswith("|"):
+            in_table = False
             continue
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) < 2:
+        if not in_table:
+            # A table's first row is its header.
+            in_table = True
+            labels = [_heading_key(cell) for cell in cells]
+            payg_col = labels.index("pay as you go") if "pay as you go" in labels else None
+            continue
+        if payg_col is None or len(cells) <= payg_col:
             continue
         # The model name stands before any dash-joined description.
         name = re.split(r"\s+[—–-]\s+", cells[0], 1)[0]
         model = _slug(name)
-        payg = re.sub(r"~~.*?~~", "", cells[1])
-        if section == "speech to text" and denominator == "$/minute":
+        payg = re.sub(r"~~.*?~~", "", cells[payg_col])
+        keys = list(path.values())
+        if "speech to text" in keys and not any("add on" in key for key in keys):
             if not _DEEPGRAM_STT.match(model):
                 continue
             rate = _DEEPGRAM_MIN.search(payg)
             if not rate:
                 continue
-            unit = (
-                "streaming_audio_minute"
-                if subsection == "streaming"
-                else "audio_minute"
-            )
+            unit = "streaming_audio_minute" if "streaming" in keys else "audio_minute"
             prices.setdefault((model, "audio_transcription"), {})[unit] = float(
                 rate.group(1)
             )
-        elif section == "text to speech":
+        elif "text to speech" in keys:
             if not _DEEPGRAM_TTS.match(model):
                 continue
             rate = _DEEPGRAM_KCHAR.search(payg)
@@ -449,15 +463,35 @@ def parse_livekit(text: str, today: str) -> list[dict[str, Any]]:
 
 # --- TypeSafe: markdown model tables on the Models docs page ---------------
 
-# Each current model is a two-column table headed "| Display name |
-# `model-id` |", with a price row whose label names its denominators in
-# the order its figures appear ("Price (per Btok / per Mtok) | $42 /
-# $0.042"). The section's price note states which tokens are charged.
-_TYPESAFE_MODEL = re.compile(r"^\|\s*([^|`]+?)\s*\|\s*`([a-z0-9._-]+)`\s*\|\s*$")
-_TYPESAFE_PRICE = re.compile(r"^\|\s*Price \(([^)]*)\)\s*\|\s*(.+?)\s*\|\s*$")
+# The current models sit in tables whose first column labels the rows
+# and whose every later column is one model: one table per model, headed
+# "| Display name | `model-id` |" (the form through 2026-10-09), or one
+# table with a column per model and a "Model ID" row (from 2026-10-14).
+# A price row's label names its denominators in the order its figures
+# appear ("Price (per Btok / per Mtok) | $42 / $0.042"). The section's
+# price note states which tokens are charged.
+_TYPESAFE_ID = re.compile(r"`([a-z0-9._-]+)`")
+_TYPESAFE_PRICE_LABEL = re.compile(r"Price \(([^)]*)\)")
 _TYPESAFE_RATE = re.compile(r"\$([0-9]+(?:\.[0-9]+)?)")
 # An aliases-table row: the alias id, then the versioned id it points to.
 _TYPESAFE_ALIAS = re.compile(r"^\|\s*`([a-z0-9._-]+)`\s*\|\s*`([a-z0-9._-]+)`\s*\|")
+_TABLE_ALIGNMENT = re.compile(r":?-+:?")
+
+
+def _markdown_tables(lines: list[str]) -> list[list[list[str]]]:
+    """Each run of consecutive table lines as rows of stripped cells,
+    header row first, alignment rows dropped."""
+    tables: list[list[list[str]]] = []
+    rows: list[list[str]] = []
+    for line in [*lines, ""]:
+        if line.startswith("|"):
+            cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+            if not all(_TABLE_ALIGNMENT.fullmatch(cell) for cell in cells):
+                rows.append(cells)
+        elif rows:
+            tables.append(rows)
+            rows = []
+    return tables
 
 
 def _markdown_section(text: str, heading: str) -> list[str] | None:
@@ -492,41 +526,50 @@ def parse_typesafe(text: str, today: str) -> list[dict[str, Any]]:
     note = " ".join(
         line.casefold() for line in section if line.startswith("* **Price:**")
     )
-    if "charged per input token" not in note:
+    if "per input token" not in note:
         return []
     output_free = "output tokens are free" in note
 
-    models: list[dict[str, str]] = []
-    for line in section:
-        if header := _TYPESAFE_MODEL.match(line):
-            models.append({"id": header.group(2)})
-        elif models and (price_row := _TYPESAFE_PRICE.match(line)):
-            models[-1]["labels"], models[-1]["figures"] = price_row.groups()
-
-    records = []
-    for model in models:
-        labels = [part.strip().casefold() for part in model.get("labels", "").split("/")]
-        figures = model.get("figures", "").replace("\\", "").split("/")
-        if len(labels) != len(figures) or "per mtok" not in labels:
-            continue
-        rate = _TYPESAFE_RATE.fullmatch(figures[labels.index("per mtok")].strip())
-        if not rate:
-            continue
-        price = {"input_mtok": float(rate.group(1))}
-        if output_free:
-            price["output_mtok"] = 0.0
-        if not _well_formed(price, stated_free=frozenset({"output_mtok"})):
-            continue
-        records.append(
-            _record(
-                "typesafe",
-                model["id"],
-                "evaluation",
-                price,
-                "typesafe_pricing",
-                today,
-            )
+    records: list[dict[str, Any]] = []
+    for header, *rows in _markdown_tables(section):
+        id_row = next((row for row in rows if row[0].casefold() == "model id"), None)
+        price_row = next(
+            (row for row in rows if _TYPESAFE_PRICE_LABEL.fullmatch(row[0])), None
         )
+        if price_row is None:
+            continue
+        label = _TYPESAFE_PRICE_LABEL.fullmatch(price_row[0])
+        labels = [part.strip().casefold() for part in label.group(1).split("/")] if label else []
+        # One table per model names its id in the header; one table for
+        # all models names each in its Model ID row.
+        id_cells = header if id_row is None else id_row
+        for col in range(1, len(header)):
+            model_id = _TYPESAFE_ID.fullmatch(id_cells[col]) if col < len(id_cells) else None
+            if model_id is None or col >= len(price_row):
+                continue
+            figures = price_row[col].replace("\\", "").split("/")
+            if len(labels) != len(figures) or "per mtok" not in labels:
+                continue
+            rate = _TYPESAFE_RATE.fullmatch(figures[labels.index("per mtok")].strip())
+            if not rate:
+                continue
+            price = {"input_mtok": float(rate.group(1))}
+            if output_free:
+                price["output_mtok"] = 0.0
+            if not _well_formed(price, stated_free=frozenset({"output_mtok"})):
+                continue
+            if any(record["id"] == model_id.group(1) for record in records):
+                continue
+            records.append(
+                _record(
+                    "typesafe",
+                    model_id.group(1),
+                    "evaluation",
+                    price,
+                    "typesafe_pricing",
+                    today,
+                )
+            )
 
     priced = {record["id"]: record["price"] for record in records}
     for line in _markdown_section(text, "aliases") or []:

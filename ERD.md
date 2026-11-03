@@ -142,7 +142,7 @@ Price is a flat map of unit name to rate, never a single blended number, and nev
 | `requests_kcount` | `sonar` (Perplexity) | $12 per 1,000 requests |
 | `input_audio_mtok` | `gemini-2.5-flash` (aihubmix) | $1 per million audio tokens |
 | `audio_minute` | `nova-3-monolingual` (Deepgram) | $0.0043 per minute of pre-recorded audio |
-| `streaming_audio_minute` | `nova-3-monolingual` (Deepgram) | $0.0048 per minute of streamed audio |
+| `streaming_audio_minute` | `nova-3-monolingual` (Deepgram) | $0.0077 per minute of streamed audio |
 | `session_minute` | `u3-rt-pro` (AssemblyAI) | $0.0075 per minute of streaming-session time |
 | `kchar` | `aura-2` (Deepgram) | $0.03 per 1,000 characters of input text |
 

@@ -4,13 +4,17 @@
 
 ### Added
 
-- TypeSafe as a fifth origin page source: Jev's per-token rates read from TypeSafe's own models page (`docs.typesafe.ai/models`). Three records ship, the versioned `jev-1.13.0` and the published aliases `jev-latest` and `jev-preview`, each alias row at its target's price, so a caller pricing by either the versioned id or the id TypeSafe's model listing serves can resolve it.
+- TypeSafe as a fifth origin page source: Jev's per-token rates read from TypeSafe's own models page (`docs.typesafe.ai/models`), in either layout the page has used (a table per model, or one table with a column per model). One record ships per versioned model the page lists (`jev-1.14.0` and `jev-1.13.0` at release) and one per published alias (`jev-latest`, `jev-preview`), each alias row at its target's price, so a caller pricing by either the versioned id or the id TypeSafe's model listing serves can resolve it.
 - An `evaluation` model type for decision models that return typed judgments over supplied options, the mode word LiteLLM uses for the category.
 - A published zero rate is carried when the page states it in words: Jev's records price `output_mtok` at 0 because the models page says output tokens are free. A bare zero figure with no such statement is still refused as a parse artifact.
 
 ### Fixed
 
-- The Deepgram parser reads the markdown form the vendor's pricing page serves on content negotiation (observed 2026-10-09), extracting the current rate and ignoring a struck-through earlier price beside it, and still reads the embedded offer data of the page's HTML form. Both forms yield the same records.
+- The Deepgram parser reads the markdown form the vendor's pricing page serves on content negotiation (observed 2026-10-09), extracting the current rate and ignoring a struck-through earlier price beside it, and still reads the embedded offer data of the page's HTML form. Both forms yield the same records. It also reads the page's November 2026 redesign, which nests the rate tables at a different heading depth and spaces its rates (`$0.0077 / min`): rates are read from each table's Pay as you go column, found by its header, and add-on tables are skipped by their heading.
+
+### Changed
+
+- Deepgram's Flux transcription records follow the vendor's renamed models: `flux-stt-english` and `flux-stt-multilingual` replace `flux-english` and `flux-multilingual`.
 
 ## 1.1.0 (2026-10-02)
 
