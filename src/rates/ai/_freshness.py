@@ -37,7 +37,8 @@ LOOKUP_TIMEOUT_SECONDS = 5.0
 # unreachable freshness check, and the ladder decides below it.
 MAX_RECORD_LOOKUPS_PER_RUN = 200
 
-_USER_AGENT = "rates (+https://github.com/shehuphd/rates)"
+# Names the tool and nothing else, matching _http.py.
+_USER_AGENT = "rates"
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 # Source-wide: one commit-history feed per file covers that source's
