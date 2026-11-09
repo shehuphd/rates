@@ -30,12 +30,12 @@ rates ai list
 
 ```
 PROVIDER  MODEL                              TYPE  REASONING                  IN $/MTOK  OUT $/MTOK  STATUS
-302ai     MiniMax-M1                         chat                             0.132      1.254       active
+302ai     MiniMax-M1                                                          0.132      1.254       active
 302ai     MiniMax-M2                         chat                             0.33       1.32        active
 302ai     MiniMax-M2.1                       chat  yes                        0.3        1.2         active
 ...
 
-20 of 8632 shown (--limit 0 shows all)
+20 of 8634 shown (--limit 0 shows all)
 ```
 
 Everything about one model:
@@ -194,16 +194,16 @@ rates ai info
 
 ```
 domain: ai
-  schema version: 1.1.0
-  snapshot: 2026-11-03 (0 days old)
-  models: 8632
+  schema version: 1.2.0
+  snapshot: 2026-11-09 (0 days old)
+  models: 8634
   providers: 232
-  type known: 4439 of 8632 (untyped models never match --type)
-  sources: ok (checked 2026-11-03)
+  type known: 4339 of 8634 (untyped models never match --type)
+  sources: ok (checked 2026-11-09)
   Note: Services with unpublished, inaccessible, or non-unit pricing (subscriptions, platform bundles) aren't listed.
 ```
 
-The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-11-03; two sources inaccessible`) when some didn't. A source counts as inaccessible when it couldn't be reached or, for a vendor pricing page, when it was fetched but yielded no records (`suspect` in the envelope's `sources`, where each source also carries its role: `preferred`, `fallback`, `validation`, or `origin` for a vendor's own page).
+The sources line stays one summary: `ok` with the check date when every source answered, or a count (`checked 2026-11-09; two sources inaccessible`) when some didn't. A source counts as inaccessible when it couldn't be reached or, for a vendor pricing page, when it was fetched but yielded no records (`suspect` in the envelope's `sources`, where each source also carries its role: `preferred`, `fallback`, `validation`, or `origin` for a vendor's own page).
 
 Past 28 days, commands print a staleness warning with the ways to refresh. One flag fetches fresher data on demand, on any command:
 
